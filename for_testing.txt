@@ -159,8 +159,8 @@ while True:
             time.sleep(3)
             GPIO.output(GREEN_LED_PIN, GPIO.LOW)
             time.sleep(2)
-            lcd_display("System Ready", LINE_1)
-            lcd_display("Scan Next Card", LINE_2)
+            lcd_display("Welcome to", LINE_1)
+            lcd_display("Attendance Sys", LINE_2)
             cv2.putText(img, person_name, (x + 5, y - 10), font, 1, (0, 255, 0), 2)
             matched = True
         else:
@@ -185,8 +185,8 @@ while True:
     if matched or cv2.waitKey(1) & 0xFF == 27:
         break
 
-lcd_display("System Ready", LINE_1)
-lcd_display("Scan Next Card", LINE_2)
+lcd_display("Welcome to", LINE_1)
+lcd_display("Attendance Sys", LINE_2)
 
 cam.release()
 cv2.destroyAllWindows()
