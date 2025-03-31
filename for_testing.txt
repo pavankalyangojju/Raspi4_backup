@@ -159,6 +159,11 @@ while True:
             time.sleep(3)
             GPIO.output(GREEN_LED_PIN, GPIO.LOW)
             time.sleep(2)
+            cam.release()
+            time.sleep(5)  # Turn off camera for 5 seconds
+            cam = cv2.VideoCapture(0)
+            cam.set(3, 640)
+            cam.set(4, 480)
             lcd_display("Welcome to", LINE_1)
             lcd_display("Attendance Sys", LINE_2)
             cv2.putText(img, person_name, (x + 5, y - 10), font, 1, (0, 255, 0), 2)
