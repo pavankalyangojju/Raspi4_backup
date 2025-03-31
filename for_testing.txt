@@ -144,8 +144,8 @@ while True:
                 person_name = "Matched"
 
             print(f"[INFO] Face matched - {person_name} - Attendance Taken")
-            lcd_display("Welcome", LINE_1)
-            lcd_display(person_name[:16], LINE_2)
+            lcd_display("Your Attendance", LINE_1)
+            lcd_display(f"Welcome {person_name[:9]}", LINE_2)
             cv2.putText(img, person_name, (x + 5, y - 10), font, 1, (0, 255, 0), 2)
             GPIO.output(BUZZER_PIN, GPIO.HIGH)
             time.sleep(0.2)
