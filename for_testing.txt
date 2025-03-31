@@ -14,9 +14,15 @@ import smbus2
 
 # GPIO Setup
 BUZZER_PIN = 17
+GREEN_LED_PIN = 26
+RED_LED_PIN = 19
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(BUZZER_PIN, GPIO.OUT)
+GPIO.setup(GREEN_LED_PIN, GPIO.OUT)
+GPIO.setup(RED_LED_PIN, GPIO.OUT)
 GPIO.output(BUZZER_PIN, GPIO.LOW)
+GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+GPIO.output(RED_LED_PIN, GPIO.LOW)
 
 # LCD Setup
 LCD_ADDR = 0x27
@@ -146,13 +152,16 @@ while True:
             print(f"[INFO] Face matched - {person_name} - Attendance Taken")
             lcd_display("Your Attendance", LINE_1)
             lcd_display(f"Welcome {person_name[:9]}", LINE_2)
+            GPIO.output(BUZZER_PIN, GPIO.HIGH)
+            GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+            time.sleep(0.2)
+            GPIO.output(BUZZER_PIN, GPIO.LOW)
+            time.sleep(3)
+            GPIO.output(GREEN_LED_PIN, GPIO.LOW)
             time.sleep(2)
             lcd_display("System Ready", LINE_1)
             lcd_display("Scan Next Card", LINE_2)
             cv2.putText(img, person_name, (x + 5, y - 10), font, 1, (0, 255, 0), 2)
-            GPIO.output(BUZZER_PIN, GPIO.HIGH)
-            time.sleep(0.2)
-            GPIO.output(BUZZER_PIN, GPIO.LOW)
             matched = True
         else:
             print("[WARNING] Unknown face detected - Triggering buzzer")
@@ -163,6 +172,9 @@ while True:
                 time.sleep(0.2)
                 GPIO.output(BUZZER_PIN, GPIO.LOW)
                 time.sleep(0.2)
+            GPIO.output(RED_LED_PIN, GPIO.HIGH)
+            time.sleep(3)
+            GPIO.output(RED_LED_PIN, GPIO.LOW)
             cv2.putText(img, "Unknown Face", (x, y - 10), font, 1, (0, 0, 255), 2)
 
         cv2.rectangle(img, (x, y), (x+w, y+h), (255, 0, 0), 2)
