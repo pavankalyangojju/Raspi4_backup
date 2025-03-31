@@ -69,14 +69,14 @@ lcd_init()
 lcd_display("Welcome to", LINE_1)
 lcd_display("AttendanceSystem", LINE_2)
 time.sleep(2)
-lcd_display("Scan your", LINE_1)
-lcd_display("RFID Card...", LINE_2)
 
 reader = SimpleMFRC522()
 face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
 recognizer = cv2.face.LBPHFaceRecognizer_create()
 
 while True:
+    lcd_display("Scan your", LINE_1)
+    lcd_display("RFID Card...", LINE_2)
     cam = cv2.VideoCapture(0)
     cam.set(3, 640)
     cam.set(4, 480)
@@ -163,8 +163,6 @@ while True:
                 cam.release()
                 cv2.destroyAllWindows()
                 time.sleep(3)
-                lcd_display("Welcome to", LINE_1)
-                lcd_display("AttendanceSystem", LINE_2)
                 matched = True
                 break
             else:
