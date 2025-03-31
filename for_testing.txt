@@ -14,8 +14,8 @@ import smbus2
 
 # GPIO Setup
 BUZZER_PIN = 17
-GREEN_LED_PIN = 26
-RED_LED_PIN = 19
+GREEN_LED_PIN = 27
+RED_LED_PIN = 22
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(BUZZER_PIN, GPIO.OUT)
 GPIO.setup(GREEN_LED_PIN, GPIO.OUT)
@@ -175,6 +175,8 @@ while True:
             GPIO.output(RED_LED_PIN, GPIO.HIGH)
             time.sleep(3)
             GPIO.output(RED_LED_PIN, GPIO.LOW)
+            lcd_display("Put Correct", LINE_1)
+            lcd_display("Face", LINE_2)
             cv2.putText(img, "Unknown Face", (x, y - 10), font, 1, (0, 0, 255), 2)
 
         cv2.rectangle(img, (x, y), (x+w, y+h), (255, 0, 0), 2)
