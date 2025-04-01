@@ -14,6 +14,7 @@ import smbus2
 import requests
 from datetime import datetime
 import csv
+import tempfile
 
 # GPIO Setup
 BUZZER_PIN = 17
@@ -75,13 +76,15 @@ def lcd_display(message, line):
     for char in message:
         lcd_byte(ord(char), LCD_CHR)
 
-def send_telegram_photo(photo_path, caption):
+def send_telegram_photo(img, caption):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
     try:
-        with open(photo_path, 'rb') as photo:
-            files = {'photo': photo}
-            data = {'chat_id': CHAT_ID, 'caption': caption}
-            requests.post(url, files=files, data=data)
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as temp:
+            cv2.imwrite(temp.name, img)
+            with open(temp.name, 'rb') as photo:
+                files = {'photo': photo}
+                data = {'chat_id': CHAT_ID, 'caption': caption}
+                requests.post(url, files=files, data=data)
     except Exception as e:
         print(f"[ERROR] Failed to send Telegram photo: {e}")
 
@@ -203,11 +206,8 @@ try:
                     GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    photo_path = f"attendance_{rfid_id}.jpg"
-                    cv2.imwrite(photo_path, img)
-
                     caption = f"Attendance Taken\nName: {person_name}\nRFID: {rfid_id}\nTime: {timestamp}"
-                    send_telegram_photo(photo_path, caption)
+                    send_telegram_photo(img, caption)
                     send_attendance_api(person_name, rfid_id, timestamp)
                     log_to_csv(person_name, rfid_id, timestamp)
 
