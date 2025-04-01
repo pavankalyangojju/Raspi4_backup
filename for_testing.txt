@@ -20,16 +20,19 @@ RELAY_PINS = {
     "relay4": 6,
 }
 SERVO_PIN = 17
+GREEN_LED = 22
+RED_LED = 27
+BUZZER = 5
 
-for pin in RELAY_PINS.values():
+ALL_OUTPUTS = list(RELAY_PINS.values()) + [SERVO_PIN, GREEN_LED, RED_LED, BUZZER]
+for pin in ALL_OUTPUTS:
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.LOW)
 
-GPIO.setup(SERVO_PIN, GPIO.OUT)
 servo = GPIO.PWM(SERVO_PIN, 50)
 servo.start(0)
 
-# Telegram Bot Setup
+# Telegram Bot
 BOT_TOKEN = "7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 last_update_id = 0
@@ -87,6 +90,24 @@ def handle_telegram():
         except Exception as e:
             print(f"[ERROR] Telegram handler: {e}")
         time.sleep(2)
+
+def matched_actions():
+    GPIO.output(GREEN_LED, GPIO.HIGH)
+    GPIO.output(BUZZER, GPIO.HIGH)
+    time.sleep(2)  # Buzzer on for 2 seconds
+    GPIO.output(BUZZER, GPIO.LOW)
+    time.sleep(3)  # Remaining 3 seconds for LED
+    GPIO.output(GREEN_LED, GPIO.LOW)
+
+def unmatched_actions():
+    GPIO.output(RED_LED, GPIO.HIGH)
+    for _ in range(2):
+        GPIO.output(BUZZER, GPIO.HIGH)
+        time.sleep(0.5)
+        GPIO.output(BUZZER, GPIO.LOW)
+        time.sleep(0.5)
+    time.sleep(3)  # Remaining LED time
+    GPIO.output(RED_LED, GPIO.LOW)
 
 def recognize_and_act():
     reader = SimpleMFRC522()
@@ -153,10 +174,12 @@ def recognize_and_act():
                 GPIO.output(RELAY_PINS["relay2"], GPIO.HIGH)
                 GPIO.output(RELAY_PINS["relay3"], GPIO.LOW)
                 GPIO.output(RELAY_PINS["relay4"], GPIO.LOW)
+                matched_actions()
                 matched = True
                 break
             else:
                 cv2.putText(frame, "Unknown", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                unmatched_actions()
 
         cv2.imshow("Face Recognition", frame)
         if matched or cv2.waitKey(1) & 0xFF == 27:
