@@ -18,18 +18,22 @@ HTML_TEMPLATE = """
         table { border-collapse: collapse; width: 100%; }
         th, td { padding: 8px 12px; border: 1px solid #ccc; text-align: left; }
         th { background-color: #f2f2f2; }
-        select { padding: 5px; font-size: 16px; }
+        form { margin-bottom: 20px; }
+        input, select { padding: 5px; font-size: 16px; margin-right: 10px; }
     </style>
 </head>
 <body>
     <h1>Attendance Dashboard</h1>
     <form method="get">
         <label for="date">Select Date:</label>
-        <select name="date" onchange="this.form.submit()">
+        <select name="date">
             {% for d in dates %}
             <option value="{{ d }}" {% if selected == d %}selected{% endif %}>{{ d }}</option>
             {% endfor %}
         </select>
+        <label for="name">Search Name:</label>
+        <input type="text" name="name" value="{{ name or '' }}" placeholder="Enter name"/>
+        <input type="submit" value="Filter"/>
     </form>
 
     {% if records %}
@@ -44,7 +48,7 @@ HTML_TEMPLATE = """
         </tbody>
     </table>
     {% else %}
-        <p>No records found for selected date.</p>
+        <p>No records found for the given search.</p>
     {% endif %}
 </body>
 </html>
@@ -58,7 +62,7 @@ def dashboard():
     if os.path.exists(CSV_FILE):
         with open(CSV_FILE, 'r') as f:
             reader = csv.reader(f)
-            next(reader)  # Skip header
+            next(reader)
             for row in reader:
                 if len(row) == 4:
                     dates.add(row[2])
@@ -66,16 +70,26 @@ def dashboard():
 
     dates = sorted(dates)
     selected_date = request.args.get("date") or (dates[-1] if dates else None)
-    filtered = [r for r in records if r[2] == selected_date]
+    search_name = request.args.get("name", "").strip().lower()
 
-    return render_template_string(HTML_TEMPLATE, records=filtered, dates=dates, selected=selected_date)
+    filtered = [
+        r for r in records
+        if r[2] == selected_date and (not search_name or search_name in r[0].lower())
+    ]
 
+    return render_template_string(
+        HTML_TEMPLATE,
+        records=filtered,
+        dates=dates,
+        selected=selected_date,
+        name=search_name
+    )
 
 @app.route('/attendance', methods=['POST'])
 def receive_attendance():
     data = request.json
     name = data.get("name")
-    rfid = data.get("rfid")  # Still logged in CSV, but not shown on dashboard
+    rfid = data.get("rfid")
     datetime_str = data.get("datetime")
 
     if not all([name, rfid, datetime_str]):
