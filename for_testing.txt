@@ -11,6 +11,25 @@ from mfrc522 import SimpleMFRC522
 import time
 from PIL import Image
 import smbus2
+import requests
+
+# Telegram Bot Config
+BOT_TOKEN = "8129064480:AAFZZjw7UTUrPgwUW33xu_B51MyJPg3WneY"
+CHAT_ID = "1367693706"
+
+def send_telegram_photo(image_path, caption=""):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    try:
+        with open(image_path, 'rb') as photo:
+            files = {'photo': photo}
+            data = {'chat_id': CHAT_ID, 'caption': caption}
+            response = requests.post(url, files=files, data=data)
+        if response.status_code == 200:
+            print("[INFO] Photo sent to Telegram.")
+        else:
+            print("[ERROR] Failed to send photo. Status:", response.status_code)
+    except Exception as e:
+        print("[ERROR] Telegram Error:", e)
 
 # GPIO Setup
 BUZZER_PIN = 17
@@ -154,6 +173,11 @@ try:
                     print(f"[INFO] Face matched - {person_name} - Attendance Taken")
                     lcd_display("Your Attendance", LINE_1)
                     lcd_display(f"Welcome {person_name[:9]}", LINE_2)
+
+                    img_path = f"captured_{rfid_id}.jpg"
+                    cv2.imwrite(img_path, img)
+                    send_telegram_photo(img_path, f"Attendance Taken for {person_name}")
+
                     GPIO.output(BUZZER_PIN, GPIO.HIGH)
                     GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
                     time.sleep(0.2)
