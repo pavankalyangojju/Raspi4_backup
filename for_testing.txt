@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 '''
-Real Time Face Recognition with RFID Folder-Based Matching and Buzzer Warning
+Real Time Face Recognition with RFID Folder-Based Matching, Telegram Alerts, API Logging, and LCD/Buzzer Feedback
 '''
 
 import cv2
@@ -13,19 +13,6 @@ from PIL import Image
 import smbus2
 import requests
 from datetime import datetime
-
-# Telegram Setup
-BOT_TOKEN = "8129064480:AAFZZjw7UTUrPgwUW33xu_B51MyJPg3WneY"
-CHAT_ID = "1367693706"
-
-def send_telegram_photo(photo_path, name):
-    now = datetime.now()
-    caption = f"Name: {name}\nDate: {now.strftime('%d-%m-%Y')}\nTime: {now.strftime('%H:%M:%S')}"
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-    with open(photo_path, "rb") as photo:
-        files = {"photo": photo}
-        data = {"chat_id": CHAT_ID, "caption": caption}
-        requests.post(url, files=files, data=data)
 
 # GPIO Setup
 BUZZER_PIN = 17
@@ -49,6 +36,13 @@ ENABLE = 0b00000100
 LINE_1 = 0x80
 LINE_2 = 0xC0
 bus = smbus2.SMBus(1)
+
+# Telegram Config
+BOT_TOKEN = "8129064480:AAFZZjw7UTUrPgwUW33xu_B51MyJPg3WneY"
+CHAT_ID = "1367693706"
+
+# API Endpoint
+API_URL = "http://localhost:5000/attendance"
 
 def lcd_byte(bits, mode):
     high_bits = mode | (bits & 0xF0) | LCD_BACKLIGHT
@@ -79,6 +73,31 @@ def lcd_display(message, line):
     message = message.ljust(LCD_WIDTH, ' ')
     for char in message:
         lcd_byte(ord(char), LCD_CHR)
+
+def send_telegram_photo(photo_path, caption):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    try:
+        with open(photo_path, 'rb') as photo:
+            files = {'photo': photo}
+            data = {'chat_id': CHAT_ID, 'caption': caption}
+            requests.post(url, files=files, data=data)
+    except Exception as e:
+        print(f"[ERROR] Failed to send Telegram photo: {e}")
+
+def send_attendance_api(name, rfid, timestamp):
+    payload = {
+        "name": name,
+        "rfid": rfid,
+        "datetime": timestamp
+    }
+    try:
+        response = requests.post(API_URL, json=payload)
+        if response.status_code == 200:
+            print("[INFO] Attendance logged via API")
+        else:
+            print(f"[WARNING] API Error: {response.status_code}")
+    except Exception as e:
+        print(f"[ERROR] API send failed: {e}")
 
 lcd_init()
 lcd_display("Welcome to", LINE_1)
@@ -176,11 +195,13 @@ try:
                     time.sleep(3)
                     GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    photo_path = f"attendance_photos/{person_name}_{timestamp}.jpg"
-                    os.makedirs("attendance_photos", exist_ok=True)
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    photo_path = f"attendance_{rfid_id}.jpg"
                     cv2.imwrite(photo_path, img)
-                    send_telegram_photo(photo_path, person_name)
+
+                    caption = f"Attendance Taken\nName: {person_name}\nRFID: {rfid_id}\nTime: {timestamp}"
+                    send_telegram_photo(photo_path, caption)
+                    send_attendance_api(person_name, rfid_id, timestamp)
 
                     matched = True
                     break
