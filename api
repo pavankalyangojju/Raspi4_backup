@@ -1,0 +1,35 @@
+from flask import Flask, request, jsonify
+import csv
+import os
+from datetime import datetime
+
+app = Flask(__name__)
+
+# Ensure a folder for attendance logs exists
+os.makedirs("api_logs", exist_ok=True)
+
+@app.route('/attendance', methods=['POST'])
+def receive_attendance():
+    data = request.json
+
+    name = data.get("name")
+    rfid = data.get("rfid")
+    date = data.get("date")
+    time = data.get("time")
+
+    if not all([name, rfid, date, time]):
+        return jsonify({"error": "Missing one or more required fields"}), 400
+
+    log_file = f"api_logs/attendance_{date}.csv"
+    file_exists = os.path.isfile(log_file)
+
+    with open(log_file, 'a', newline='') as file:
+        writer = csv.writer(file)
+        if not file_exists:
+            writer.writerow(["Name", "RFID", "Date", "Time"])
+        writer.writerow([name, rfid, date, time])
+
+    return jsonify({"message": "Attendance logged successfully"}), 200
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
