@@ -76,11 +76,17 @@ def receive_attendance():
     data = request.json
     name = data.get("name")
     rfid = data.get("rfid")
-    date = data.get("date")
-    time_ = data.get("time")
+    datetime_str = data.get("datetime")
 
-    if not all([name, rfid, date, time_]):
+    if not all([name, rfid, datetime_str]):
         return jsonify({"error": "Missing required fields"}), 400
+
+    try:
+        dt = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S")
+        date = dt.strftime("%Y-%m-%d")
+        time_ = dt.strftime("%H:%M:%S")
+    except ValueError:
+        return jsonify({"error": "Invalid datetime format"}), 400
 
     filename = f"api_logs/attendance_{date}.csv"
     file_exists = os.path.isfile(filename)
