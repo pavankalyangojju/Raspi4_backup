@@ -46,6 +46,10 @@ CHAT_ID = "1367693706"
 # API Endpoint
 API_URL = "http://localhost:5000/attendance"
 
+# Session cache to prevent duplicate attendance
+last_attendance = {}
+DUPLICATE_DELAY = 10  # seconds
+
 def lcd_byte(bits, mode):
     high_bits = mode | (bits & 0xF0) | LCD_BACKLIGHT
     low_bits = mode | ((bits << 4) & 0xF0) | LCD_BACKLIGHT
@@ -195,23 +199,31 @@ try:
                     else:
                         person_name = "Matched"
 
-                    print(f"[INFO] Face matched - {person_name} - Attendance Taken")
-                    lcd_display("Your Attendance", LINE_1)
-                    lcd_display(f"Welcome {person_name[:9]}", LINE_2)
-                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
-                    GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
-                    time.sleep(0.2)
-                    GPIO.output(BUZZER_PIN, GPIO.LOW)
-                    time.sleep(3)
-                    GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+                    current_time = time.time()
+                    last_time = last_attendance.get(rfid_id, 0)
 
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    caption = f"Attendance Taken\nName: {person_name}\nRFID: {rfid_id}\nTime: {timestamp}"
-                    send_telegram_photo(img, caption)
-                    send_attendance_api(person_name, rfid_id, timestamp)
-                    log_to_csv(person_name, rfid_id, timestamp)
+                    if current_time - last_time > DUPLICATE_DELAY:
+                        print(f"[INFO] Face matched - {person_name} - Attendance Taken")
+                        lcd_display("Your Attendance", LINE_1)
+                        lcd_display(f"Welcome {person_name[:9]}", LINE_2)
+                        GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                        GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+                        time.sleep(0.2)
+                        GPIO.output(BUZZER_PIN, GPIO.LOW)
+                        time.sleep(3)
+                        GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 
-                    matched = True
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        caption = f"Attendance Taken\nName: {person_name}\nRFID: {rfid_id}\nTime: {timestamp}"
+                        send_telegram_photo(img, caption)
+                        send_attendance_api(person_name, rfid_id, timestamp)
+                        log_to_csv(person_name, rfid_id, timestamp)
+
+                        last_attendance[rfid_id] = current_time
+                        matched = True
+                    else:
+                        print(f"[INFO] Skipping duplicate scan for {person_name}")
+
                     break
                 else:
                     print("[WARNING] Unknown face detected - Triggering buzzer")
