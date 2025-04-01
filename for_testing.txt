@@ -46,7 +46,7 @@ CHAT_ID = "1367693706"
 # API Endpoint
 API_URL = "http://localhost:5000/attendance"
 
-# Session cache to prevent duplicate attendance
+# Prevent duplicate entries
 last_attendance = {}
 DUPLICATE_DELAY = 10  # seconds
 
@@ -222,7 +222,7 @@ try:
                         last_attendance[rfid_id] = current_time
                         matched = True
                     else:
-                        print(f"[INFO] Skipping duplicate scan for {person_name}")
+                        print(f"[INFO] Duplicate scan skipped for {person_name}")
 
                     break
                 else:
