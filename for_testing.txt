@@ -29,10 +29,12 @@ GPIO.setup(SERVO_PIN, GPIO.OUT)
 servo = GPIO.PWM(SERVO_PIN, 50)
 servo.start(0)
 
-# Telegram Bot Setup
+# Telegram Bot
 BOT_TOKEN = "8129064480:AAFZZjw7UTUrPgwUW33xu_B51MyJPg3WneY"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 last_update_id = 0
+
+reader = SimpleMFRC522()  # Global reader initialized once
 
 def open_close():
     servo.ChangeDutyCycle(12.5)
@@ -62,22 +64,19 @@ def handle_telegram():
                         if relay in RELAY_PINS:
                             if state == "on":
                                 GPIO.output(RELAY_PINS[relay], GPIO.HIGH)
-                                response = f"{relay} turned ON"
+                                reply = f"{relay} turned ON"
                             elif state == "off":
                                 GPIO.output(RELAY_PINS[relay], GPIO.LOW)
-                                response = f"{relay} turned OFF"
+                                reply = f"{relay} turned OFF"
                             else:
-                                response = "Invalid command format"
-                            requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": response})
+                                reply = "Invalid command format"
+                            requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": reply})
         except Exception as e:
             print(f"[ERROR] Telegram handler: {e}")
         time.sleep(2)
 
 def recognize_and_act():
-    reader = SimpleMFRC522()
-    face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
-    recognizer = cv2.face.LBPHFaceRecognizer_create()
-
+    print("\n[INFO] Please scan your RFID card...")
     try:
         rfid_id, _ = reader.read()
         rfid_id = str(rfid_id)
@@ -86,25 +85,27 @@ def recognize_and_act():
         print(f"[ERROR] RFID read failed: {e}")
         return
 
-    folder = os.path.join("dataset", rfid_id)
-    if not os.path.exists(folder):
-        print("[ERROR] No image dataset for this RFID")
+    dataset_path = os.path.join("dataset", rfid_id)
+    if not os.path.exists(dataset_path):
+        print("[ERROR] No dataset found for RFID")
         return
 
-    def get_data(path):
-        faces, ids = [], []
-        for file in os.listdir(path):
-            if file.endswith(".jpg"):
-                img = Image.open(os.path.join(path, file)).convert("L")
-                np_img = np.array(img, 'uint8')
-                detected = face_detector.detectMultiScale(np_img)
-                for (x, y, w, h) in detected:
-                    faces.append(np_img[y:y+h, x:x+w])
-                    ids.append(1)
-        return faces, ids
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
 
-    print("[INFO] Training...")
-    faces, ids = get_data(folder)
+    def get_images(path):
+        face_samples, ids = [], []
+        for file in os.listdir(path):
+            if file.endswith('.jpg'):
+                img = Image.open(os.path.join(path, file)).convert('L')
+                np_img = np.array(img, 'uint8')
+                faces = face_detector.detectMultiScale(np_img)
+                for (x, y, w, h) in faces:
+                    face_samples.append(np_img[y:y+h, x:x+w])
+                    ids.append(1)
+        return face_samples, ids
+
+    faces, ids = get_images(dataset_path)
     recognizer.train(faces, np.array(ids))
 
     user_name = "Unknown"
@@ -120,7 +121,7 @@ def recognize_and_act():
     cam.set(3, 640)
     cam.set(4, 480)
 
-    print("[INFO] Starting face recognition...")
+    print("[INFO] Starting Face Recognition...")
     matched = False
     while True:
         ret, img = cam.read()
@@ -131,10 +132,9 @@ def recognize_and_act():
         faces = face_detector.detectMultiScale(gray, 1.3, 5)
 
         for (x, y, w, h) in faces:
-            id_pred, conf = recognizer.predict(gray[y:y+h, x:x+w])
-            if conf < 40:
-                print(f"[MATCH] {user_name} - Confidence: {conf}")
-                cv2.putText(img, user_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
+            id_pred, confidence = recognizer.predict(gray[y:y+h, x:x+w])
+            if confidence < 40:
+                print(f"[MATCH] {user_name} - Confidence: {confidence}")
                 open_close()
                 GPIO.output(RELAY_PINS["relay1"], GPIO.HIGH)
                 GPIO.output(RELAY_PINS["relay2"], GPIO.HIGH)
@@ -142,16 +142,15 @@ def recognize_and_act():
                 GPIO.output(RELAY_PINS["relay4"], GPIO.LOW)
                 matched = True
             else:
-                cv2.putText(img, "Unknown", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                print("[INFO] Unknown face")
 
-        cv2.imshow("Face Recognition", img)
         if matched or cv2.waitKey(1) & 0xFF == 27:
             break
 
     cam.release()
     cv2.destroyAllWindows()
 
-# Start
+# Start program
 if __name__ == "__main__":
     threading.Thread(target=handle_telegram, daemon=True).start()
     while True:
