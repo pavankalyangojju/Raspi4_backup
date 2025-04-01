@@ -13,6 +13,7 @@ from PIL import Image
 import smbus2
 import requests
 from datetime import datetime
+import csv
 
 # GPIO Setup
 BUZZER_PIN = 17
@@ -98,6 +99,12 @@ def send_attendance_api(name, rfid, timestamp):
             print(f"[WARNING] API Error: {response.status_code}")
     except Exception as e:
         print(f"[ERROR] API send failed: {e}")
+
+def log_to_csv(name, rfid, timestamp):
+    with open("attendance_log.csv", mode="a", newline='') as file:
+        writer = csv.writer(file)
+        date_part, time_part = timestamp.split()
+        writer.writerow([name, rfid, date_part, time_part])
 
 lcd_init()
 lcd_display("Welcome to", LINE_1)
@@ -202,6 +209,7 @@ try:
                     caption = f"Attendance Taken\nName: {person_name}\nRFID: {rfid_id}\nTime: {timestamp}"
                     send_telegram_photo(photo_path, caption)
                     send_attendance_api(person_name, rfid_id, timestamp)
+                    log_to_csv(person_name, rfid_id, timestamp)
 
                     matched = True
                     break
