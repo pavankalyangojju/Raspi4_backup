@@ -1,35 +1,97 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 import csv
 import os
 from datetime import datetime
 
 app = Flask(__name__)
 
-# Ensure a folder for attendance logs exists
+# Ensure logs directory exists
 os.makedirs("api_logs", exist_ok=True)
+
+# HTML Template for Dashboard
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Attendance Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { color: #2F4F4F; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { padding: 8px 12px; border: 1px solid #ccc; text-align: left; }
+        th { background-color: #f2f2f2; }
+        select { padding: 5px; font-size: 16px; }
+    </style>
+</head>
+<body>
+    <h1>Attendance Dashboard</h1>
+    <form method="get">
+        <label for="date">Select Date:</label>
+        <select name="date" onchange="this.form.submit()">
+            {% for d in dates %}
+            <option value="{{ d }}" {% if selected == d %}selected{% endif %}>{{ d }}</option>
+            {% endfor %}
+        </select>
+    </form>
+
+    {% if records %}
+    <table>
+        <thead>
+            <tr><th>Name</th><th>RFID</th><th>Date</th><th>Time</th></tr>
+        </thead>
+        <tbody>
+            {% for row in records %}
+            <tr><td>{{ row[0] }}</td><td>{{ row[1] }}</td><td>{{ row[2] }}</td><td>{{ row[3] }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+        <p>No records found for selected date.</p>
+    {% endif %}
+</body>
+</html>
+"""
+
+@app.route('/')
+def dashboard():
+    logs = os.listdir("api_logs")
+    dates = sorted([f.split('_')[1].replace('.csv', '') for f in logs if f.startswith("attendance_")])
+
+    selected_date = request.args.get("date") or (dates[-1] if dates else None)
+    records = []
+
+    if selected_date:
+        log_file = f"api_logs/attendance_{selected_date}.csv"
+        if os.path.exists(log_file):
+            with open(log_file, 'r') as file:
+                reader = csv.reader(file)
+                next(reader)  # Skip header
+                records = list(reader)
+
+    return render_template_string(HTML_TEMPLATE, records=records, dates=dates, selected=selected_date)
+
 
 @app.route('/attendance', methods=['POST'])
 def receive_attendance():
     data = request.json
-
     name = data.get("name")
     rfid = data.get("rfid")
     date = data.get("date")
-    time = data.get("time")
+    time_ = data.get("time")
 
-    if not all([name, rfid, date, time]):
-        return jsonify({"error": "Missing one or more required fields"}), 400
+    if not all([name, rfid, date, time_]):
+        return jsonify({"error": "Missing required fields"}), 400
 
-    log_file = f"api_logs/attendance_{date}.csv"
-    file_exists = os.path.isfile(log_file)
+    filename = f"api_logs/attendance_{date}.csv"
+    file_exists = os.path.isfile(filename)
 
-    with open(log_file, 'a', newline='') as file:
-        writer = csv.writer(file)
+    with open(filename, 'a', newline='') as f:
+        writer = csv.writer(f)
         if not file_exists:
             writer.writerow(["Name", "RFID", "Date", "Time"])
-        writer.writerow([name, rfid, date, time])
+        writer.writerow([name, rfid, date, time_])
 
-    return jsonify({"message": "Attendance logged successfully"}), 200
+    return jsonify({"message": "Attendance saved successfully"}), 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
