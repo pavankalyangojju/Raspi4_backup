@@ -13,7 +13,6 @@ from PIL import Image
 import smbus2
 import requests
 from datetime import datetime
-import csv
 import tempfile
 
 # GPIO Setup
@@ -45,10 +44,6 @@ CHAT_ID = "1367693706"
 
 # API Endpoint
 API_URL = "http://localhost:5000/attendance"
-
-# Prevent duplicate entries
-last_attendance = {}
-DUPLICATE_DELAY = 10  # seconds
 
 def lcd_byte(bits, mode):
     high_bits = mode | (bits & 0xF0) | LCD_BACKLIGHT
@@ -106,12 +101,6 @@ def send_attendance_api(name, rfid, timestamp):
             print(f"[WARNING] API Error: {response.status_code}")
     except Exception as e:
         print(f"[ERROR] API send failed: {e}")
-
-def log_to_csv(name, rfid, timestamp):
-    with open("attendance_log.csv", mode="a", newline='') as file:
-        writer = csv.writer(file)
-        date_part, time_part = timestamp.split()
-        writer.writerow([name, rfid, date_part, time_part])
 
 lcd_init()
 lcd_display("Welcome to", LINE_1)
@@ -199,31 +188,22 @@ try:
                     else:
                         person_name = "Matched"
 
-                    current_time = time.time()
-                    last_time = last_attendance.get(rfid_id, 0)
+                    print(f"[INFO] Face matched - {person_name} - Attendance Taken")
+                    lcd_display("Your Attendance", LINE_1)
+                    lcd_display(f"Welcome {person_name[:9]}", LINE_2)
+                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                    GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+                    time.sleep(0.2)
+                    GPIO.output(BUZZER_PIN, GPIO.LOW)
+                    time.sleep(3)
+                    GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 
-                    if current_time - last_time > DUPLICATE_DELAY:
-                        print(f"[INFO] Face matched - {person_name} - Attendance Taken")
-                        lcd_display("Your Attendance", LINE_1)
-                        lcd_display(f"Welcome {person_name[:9]}", LINE_2)
-                        GPIO.output(BUZZER_PIN, GPIO.HIGH)
-                        GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
-                        time.sleep(0.2)
-                        GPIO.output(BUZZER_PIN, GPIO.LOW)
-                        time.sleep(3)
-                        GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    caption = f"Attendance Taken\nName: {person_name}\nRFID: {rfid_id}\nTime: {timestamp}"
+                    send_telegram_photo(img, caption)
+                    send_attendance_api(person_name, rfid_id, timestamp)
 
-                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        caption = f"Attendance Taken\nName: {person_name}\nRFID: {rfid_id}\nTime: {timestamp}"
-                        send_telegram_photo(img, caption)
-                        send_attendance_api(person_name, rfid_id, timestamp)
-                        log_to_csv(person_name, rfid_id, timestamp)
-
-                        last_attendance[rfid_id] = current_time
-                        matched = True
-                    else:
-                        print(f"[INFO] Duplicate scan skipped for {person_name}")
-
+                    matched = True
                     break
                 else:
                     print("[WARNING] Unknown face detected - Triggering buzzer")
