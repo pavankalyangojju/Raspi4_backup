@@ -80,24 +80,30 @@ def handle_telegram():
         time.sleep(1)
 
 def main():
-    reader = SimpleMFRC522()
     face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
     recognizer = cv2.face.LBPHFaceRecognizer_create()
+    reader = SimpleMFRC522()
 
-    try:
-        rfid_id, _ = reader.read()
-        rfid_id = str(rfid_id)
-        print(f"[INFO] RFID Scanned: {rfid_id}")
-    except Exception as e:
-        print(f"[ERROR] RFID Read Failed: {e}")
-        GPIO.cleanup()
-        exit()
+    print("\n[INFO] Waiting for RFID scan...")
+
+    rfid_id = None
+    timeout = time.time() + 15  # wait max 15 seconds
+    while True:
+        try:
+            rfid_id_read, _ = reader.read()
+            rfid_id = str(rfid_id_read)
+            print(f"[INFO] RFID Scanned: {rfid_id}")
+            break
+        except Exception as e:
+            print(f"[ERROR] RFID read failed: {e}")
+        if time.time() > timeout:
+            print("[WARNING] RFID scan timed out.")
+            return
 
     image_folder = os.path.join("dataset", rfid_id)
     if not os.path.exists(image_folder):
-        print(f"[ERROR] No dataset folder found for RFID {rfid_id}")
-        GPIO.cleanup()
-        exit()
+        print(f"[ERROR] Dataset not found for RFID: {rfid_id}")
+        return
 
     def get_images_and_labels(path):
         face_samples, ids = [], []
@@ -111,7 +117,7 @@ def main():
                     ids.append(1)
         return face_samples, ids
 
-    print("[INFO] Training model...")
+    print("[INFO] Training model for face recognition...")
     faces, ids = get_images_and_labels(image_folder)
     recognizer.train(faces, np.array(ids))
 
@@ -121,13 +127,13 @@ def main():
         user_row = df[df['RFID_UID'] == int(rfid_id)]
         if not user_row.empty:
             user_name = user_row.iloc[0]['Name']
-    except:
-        pass
+    except Exception as e:
+        print(f"[WARNING] Could not fetch name: {e}")
 
     matched = False
     while True:
         ret, img = cam.read()
-        if not ret:
+        if not ret or img is None:
             continue
         img = cv2.flip(img, -1)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -136,10 +142,9 @@ def main():
         for (x, y, w, h) in faces:
             id_pred, confidence = recognizer.predict(gray[y:y+h, x:x+w])
             if confidence < 40:
-                print(f"[INFO] Match: {user_name} - Confidence: {confidence}")
+                print(f"[MATCHED] {user_name} | Confidence: {confidence}")
                 cv2.putText(img, user_name, (x+5, y-5), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
                 open_close()
-                # Turn on relay 1 and 2, turn off 3 and 4
                 GPIO.output(RELAY_PINL1, GPIO.HIGH)
                 GPIO.output(RELAY_PINL2, GPIO.HIGH)
                 GPIO.output(RELAY_PINF1, GPIO.LOW)
