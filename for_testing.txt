@@ -110,12 +110,23 @@ def send_attendance_api(name, rfid, timestamp):
     except Exception as e:
         print(f"[ERROR] API send failed: {e}")
 
-def rotate_servo(start_angle=0, end_angle=180, delay=0.02):
+def rotate_servo():
     def angle_to_duty(angle):
         return 2 + (angle / 18)
-    for angle in range(start_angle, end_angle + 1, 5):
+
+    # Rotate from 0 to 180
+    for angle in range(0, 181, 5):
         servo.ChangeDutyCycle(angle_to_duty(angle))
-        time.sleep(delay)
+        time.sleep(0.02)
+
+    servo.ChangeDutyCycle(0)
+    time.sleep(10)  # Wait 10 seconds
+
+    # Rotate back to 0
+    for angle in range(180, -1, -5):
+        servo.ChangeDutyCycle(angle_to_duty(angle))
+        time.sleep(0.02)
+
     servo.ChangeDutyCycle(0)
 
 lcd_init()
@@ -230,7 +241,7 @@ try:
                     time.sleep(3)
                     GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 
-                    rotate_servo()  # Servo rotates here (0 to 180 degrees)
+                    rotate_servo()  # Rotate servo 0 -> 180, wait, then back
 
                     send_telegram_photo(img, f"Attendance Taken\nName: {person_name}\nRFID: {rfid_id}\nTime: {timestamp}")
                     send_attendance_api(person_name, rfid_id, timestamp)
