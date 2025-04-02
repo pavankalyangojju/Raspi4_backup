@@ -12,24 +12,33 @@ import tempfile
 import sys
 import subprocess
 import threading
-from telegram.ext import Application, MessageHandler, filters
+from telegram.ext import Application, MessageHandler, CommandHandler, filters
+import requests
 
 # GPIO Setup
 BUZZER_PIN = 17
 GREEN_LED_PIN = 26
 RED_LED_PIN = 19
 SERVO_PIN = 18
-RELAY_PINS = [17, 27, 22, 5]  # GPIOs for 4 relays
+RELAY_PINS = {
+    "relay1": 21,
+    "relay2": 27,
+    "relay3": 22,
+    "relay4": 5,
+}
 
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
+
+ALL_OUTPUTS = list(RELAY_PINS.values())
+for pin in ALL_OUTPUTS:
+    GPIO.setup(pin, GPIO.OUT)
+    GPIO.output(pin, GPIO.LOW)
+
 GPIO.setup(BUZZER_PIN, GPIO.OUT)
 GPIO.setup(GREEN_LED_PIN, GPIO.OUT)
 GPIO.setup(RED_LED_PIN, GPIO.OUT)
 GPIO.setup(SERVO_PIN, GPIO.OUT)
-for pin in RELAY_PINS:
-    GPIO.setup(pin, GPIO.OUT)
-    GPIO.output(pin, GPIO.LOW)
 
 GPIO.output(BUZZER_PIN, GPIO.LOW)
 GPIO.output(GREEN_LED_PIN, GPIO.LOW)
@@ -40,36 +49,61 @@ servo = GPIO.PWM(SERVO_PIN, 50)
 servo.start(0)
 
 # Telegram Bot Setup
-BOT_TOKEN = '7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI'
+BOT_TOKEN = "7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI"
+BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+last_update_id = 0
 
-def relay_control(update, context):
-    msg = update.message.text.lower()
-    if msg == 'on1':
-        GPIO.output(RELAY_PINS[0], GPIO.HIGH)
-    elif msg == 'off1':
-        GPIO.output(RELAY_PINS[0], GPIO.LOW)
-    elif msg == 'on2':
-        GPIO.output(RELAY_PINS[1], GPIO.HIGH)
-    elif msg == 'off2':
-        GPIO.output(RELAY_PINS[1], GPIO.LOW)
-    elif msg == 'on3':
-        GPIO.output(RELAY_PINS[2], GPIO.HIGH)
-    elif msg == 'off3':
-        GPIO.output(RELAY_PINS[2], GPIO.LOW)
-    elif msg == 'on4':
-        GPIO.output(RELAY_PINS[3], GPIO.HIGH)
-    elif msg == 'off4':
-        GPIO.output(RELAY_PINS[3], GPIO.LOW)
-    elif msg == 'relay all off':
-        for pin in RELAY_PINS:
-            GPIO.output(pin, GPIO.LOW)
-    elif msg == 'relay all on':
-        for pin in RELAY_PINS:
-            GPIO.output(pin, GPIO.HIGH)
+def handle_telegram():
+    global last_update_id
+    print("[INFO] Telegram listener started...")
+    while True:
+        try:
+            url = f"{BASE_URL}/getUpdates?offset={last_update_id + 1}&timeout=10"
+            res = requests.get(url).json()
 
-application = Application.builder().token(BOT_TOKEN).build()
-application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), relay_control))
-threading.Thread(target=application.run_polling, daemon=True).start()
+            for update in res.get("result", []):
+                last_update_id = update["update_id"]
+                msg = update.get("message", {}).get("text", "").lower()
+                chat_id = update["message"]["chat"]["id"]
+                print(f"[TELEGRAM] Received: {msg}")
+
+                if msg == "/relayall_on":
+                    for pin in RELAY_PINS.values():
+                        GPIO.output(pin, GPIO.HIGH)
+                    response = "All relays turned ON"
+
+                elif msg == "/relayall_off":
+                    for pin in RELAY_PINS.values():
+                        GPIO.output(pin, GPIO.LOW)
+                    response = "All relays turned OFF"
+
+                elif msg.startswith("/relay"):
+                    parts = msg.split("_")
+                    if len(parts) == 2:
+                        relay, state = parts
+                        relay = relay.lstrip("/")
+                        if relay in RELAY_PINS:
+                            if state == "on":
+                                GPIO.output(RELAY_PINS[relay], GPIO.HIGH)
+                                response = f"{relay} turned ON"
+                            elif state == "off":
+                                GPIO.output(RELAY_PINS[relay], GPIO.LOW)
+                                response = f"{relay} turned OFF"
+                            else:
+                                response = "Invalid state command."
+                        else:
+                            response = "Invalid relay name."
+                    else:
+                        response = "Invalid format. Use /relay1_on"
+                else:
+                    response = "Unknown command."
+
+                requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": response})
+        except Exception as e:
+            print(f"[ERROR] Telegram handler: {e}")
+        time.sleep(2)
+
+threading.Thread(target=handle_telegram, daemon=True).start()
 
 # LCD Setup
 LCD_ADDR = 0x27
@@ -84,6 +118,7 @@ bus = smbus2.SMBus(1)
 
 attendance_log = defaultdict(list)
 
+# LCD functions
 def lcd_byte(bits, mode):
     high_bits = mode | (bits & 0xF0) | LCD_BACKLIGHT
     low_bits = mode | ((bits << 4) & 0xF0) | LCD_BACKLIGHT
@@ -133,6 +168,7 @@ def restart_program():
     python = sys.executable
     os.execl(python, python, *sys.argv)
 
+# Initialize LCD
 lcd_init()
 lcd_display("Welcome to", LINE_1)
 lcd_display("AttendanceSystem", LINE_2)
@@ -230,10 +266,10 @@ try:
 
                     rotate_servo()
 
-                    GPIO.output(RELAY_PINS[0], GPIO.HIGH)
-                    GPIO.output(RELAY_PINS[2], GPIO.HIGH)
-                    GPIO.output(RELAY_PINS[1], GPIO.LOW)
-                    GPIO.output(RELAY_PINS[3], GPIO.LOW)
+                    GPIO.output(RELAY_PINS["relay1"], GPIO.HIGH)
+                    GPIO.output(RELAY_PINS["relay3"], GPIO.HIGH)
+                    GPIO.output(RELAY_PINS["relay2"], GPIO.LOW)
+                    GPIO.output(RELAY_PINS["relay4"], GPIO.LOW)
 
                     matched = True
                     break
