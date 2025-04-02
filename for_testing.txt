@@ -37,6 +37,9 @@ BOT_TOKEN = "7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 last_update_id = 0
 
+# Face match confidence threshold
+MATCH_THRESHOLD = 30  # Lower is stricter
+
 def open_close():
     servo.ChangeDutyCycle(12.5)
     time.sleep(1)
@@ -167,7 +170,7 @@ def recognize_and_act():
 
         for (x, y, w, h) in faces:
             id_pred, conf = recognizer.predict(gray[y:y+h, x:x+w])
-            if conf < 40:
+            if conf < MATCH_THRESHOLD:
                 print(f"[MATCH] {user_name} (Conf: {conf:.2f})")
                 open_close()
                 GPIO.output(RELAY_PINS["relay1"], GPIO.HIGH)
