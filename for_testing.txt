@@ -201,15 +201,20 @@ try:
                         send_telegram_photo(img, f"{person_name} tried third time today.\nRFID: {rfid_id}\n[Limit Reached]")
 
                         lcd_display("Limit Reached", LINE_1)
-                        lcd_display("Wait 7 Sec...", LINE_2)
-                        GPIO.output(BUZZER_PIN, GPIO.HIGH)
-                        time.sleep(7)
-                        GPIO.output(BUZZER_PIN, GPIO.LOW)
+                        lcd_display("Beep 3 Times", LINE_2)
+
+                        # Buzzer beeps 3 times with proper delay
+                        for _ in range(3):
+                            GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                            time.sleep(0.7)
+                            GPIO.output(BUZZER_PIN, GPIO.LOW)
+                            time.sleep(0.3)
 
                         cam.release()
                         cv2.destroyAllWindows()
                         print("[INFO] Waiting 3 seconds before restarting loop...")
                         time.sleep(3)
+
                         matched = True
                         break
 
