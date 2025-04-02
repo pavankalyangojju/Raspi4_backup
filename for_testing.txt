@@ -7,6 +7,9 @@ import time
 from PIL import Image
 import pandas as pd
 
+# Match confidence threshold
+MATCH_THRESHOLD = 30  # Adjust this for stricter matching
+
 # Setup GPIO
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
@@ -110,7 +113,7 @@ def main():
             id_pred, confidence = recognizer.predict(gray[y:y+h, x:x+w])
             cv2.rectangle(img, (x, y), (x+w, y+h), (255, 0, 0), 2)
 
-            if confidence < 40:
+            if confidence < MATCH_THRESHOLD:
                 cv2.putText(img, user_name, (x+5, y-5), font, 1, (255, 255, 255), 2)
                 cv2.putText(img, f"{confidence:.2f}", (x+5, y+h-5), font, 1, (255, 255, 0), 1)
                 print(f"[MATCH] Face matched with confidence {confidence:.2f}. Door Opened.")
