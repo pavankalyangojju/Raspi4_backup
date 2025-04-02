@@ -129,18 +129,16 @@ def recognize_and_act():
         return
 
     face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
+    
+    # Load the pre-trained recognizer model from a file
     recognizer = cv2.face.LBPHFaceRecognizer_create()
-
-    def load_training_data(path):
-        faces, ids = [], []
-        for file in os.listdir(path):
-            if file.endswith(".jpg"):
-                img = Image.open(os.path.join(path, file)).convert("L")
-                np_img = np.array(img, 'uint8')
-                for (x, y, w, h) in face_detector.detectMultiScale(np_img):
-                    faces.append(np_img[y:y+h, x:x+w])
-                    ids.append(1)
-        return faces, ids
+    model_path = os.path.join(dataset_path, "trainer.yml")
+    if os.path.exists(model_path):
+        recognizer.read(model_path)
+        print(f"[INFO] Pre-trained model loaded for {rfid_id}")
+    else:
+        print("[ERROR] No pre-trained model found!")
+        return
 
     try:
         df = pd.read_csv("user_data.csv")
