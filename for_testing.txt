@@ -11,13 +11,15 @@ from datetime import datetime
 import tempfile
 import sys
 import subprocess
+import threading
+import telepot
 
 # GPIO Setup
 BUZZER_PIN = 17
 GREEN_LED_PIN = 26
 RED_LED_PIN = 19
 SERVO_PIN = 18
-RELAY_PINS = [4, 5, 6, 13]  # GPIOs for 4 relays
+RELAY_PINS = [17, 27, 22, 5]  # GPIOs for 4 relays
 
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
@@ -36,6 +38,37 @@ GPIO.output(RED_LED_PIN, GPIO.LOW)
 # Servo PWM setup
 servo = GPIO.PWM(SERVO_PIN, 50)
 servo.start(0)
+
+# Telegram Setup
+BOT_TOKEN = '7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI'
+CHAT_ID = '1367693706'
+bot = telepot.Bot(BOT_TOKEN)
+
+def handle_telegram(msg):
+    content_type, chat_type, chat_id = telepot.glance(msg)
+    if content_type == 'text':
+        command = msg['text'].lower()
+        if command == 'on1':
+            GPIO.output(RELAY_PINS[0], GPIO.HIGH)
+        elif command == 'off1':
+            GPIO.output(RELAY_PINS[0], GPIO.LOW)
+        elif command == 'on2':
+            GPIO.output(RELAY_PINS[1], GPIO.HIGH)
+        elif command == 'off2':
+            GPIO.output(RELAY_PINS[1], GPIO.LOW)
+        elif command == 'on3':
+            GPIO.output(RELAY_PINS[2], GPIO.HIGH)
+        elif command == 'off3':
+            GPIO.output(RELAY_PINS[2], GPIO.LOW)
+        elif command == 'on4':
+            GPIO.output(RELAY_PINS[3], GPIO.HIGH)
+        elif command == 'off4':
+            GPIO.output(RELAY_PINS[3], GPIO.LOW)
+
+bot.message_loop(handle_telegram)
+
+# Start message loop in background thread
+threading.Thread(target=bot.message_loop, daemon=True).start()
 
 # LCD Setup
 LCD_ADDR = 0x27
@@ -83,7 +116,6 @@ def lcd_display(message, line):
 def rotate_servo():
     def angle_to_duty(angle):
         return 2 + (angle / 18)
-
     for angle in range(0, 181, 5):
         servo.ChangeDutyCycle(angle_to_duty(angle))
         time.sleep(0.02)
@@ -178,12 +210,10 @@ try:
 
             for (x, y, w, h) in faces:
                 id_pred, confidence = recognizer.predict(gray[y:y+h, x:x+w])
-
                 if confidence < 40:
                     name_file = os.path.join(image_folder, "name.txt")
                     person_name = open(name_file).read().strip() if os.path.exists(name_file) else "Matched"
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
                     print(f"[INFO] Face matched - {person_name} - Access Granted")
                     lcd_display("Your Attendance", LINE_1)
                     lcd_display(f"Welcome {person_name[:9]}", LINE_2)
@@ -193,15 +223,11 @@ try:
                     GPIO.output(BUZZER_PIN, GPIO.LOW)
                     time.sleep(3)
                     GPIO.output(GREEN_LED_PIN, GPIO.LOW)
-
                     rotate_servo()
-
-                    # Turn ON any two random relays (e.g., 0 and 2), others OFF
                     GPIO.output(RELAY_PINS[0], GPIO.HIGH)
                     GPIO.output(RELAY_PINS[2], GPIO.HIGH)
                     GPIO.output(RELAY_PINS[1], GPIO.LOW)
                     GPIO.output(RELAY_PINS[3], GPIO.LOW)
-
                     matched = True
                     break
                 else:
