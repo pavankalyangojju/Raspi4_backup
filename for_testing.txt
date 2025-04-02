@@ -7,6 +7,8 @@ from mfrc522 import SimpleMFRC522
 import time
 from PIL import Image
 import pigpio
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, CallbackContext
 
 # GPIO Setup
 GREEN_LED_PIN = 22
@@ -37,6 +39,41 @@ def set_servo_angle(angle):
     pi.set_servo_pulsewidth(SERVO_PIN, duty_cycle)
     time.sleep(1)
     pi.set_servo_pulsewidth(SERVO_PIN, 0)
+
+# Telegram Bot Setup
+TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"
+
+def relay_control(update: Update, context: CallbackContext):
+    command = update.message.text.lower()
+    if command == "/relay1_on":
+        GPIO.output(RELAY1_PIN, GPIO.HIGH)
+        update.message.reply_text("Relay 1 turned ON")
+    elif command == "/relay1_off":
+        GPIO.output(RELAY1_PIN, GPIO.LOW)
+        update.message.reply_text("Relay 1 turned OFF")
+    elif command == "/relay2_on":
+        GPIO.output(RELAY2_PIN, GPIO.HIGH)
+        update.message.reply_text("Relay 2 turned ON")
+    elif command == "/relay2_off":
+        GPIO.output(RELAY2_PIN, GPIO.LOW)
+        update.message.reply_text("Relay 2 turned OFF")
+    elif command == "/relay3_on":
+        GPIO.output(RELAY3_PIN, GPIO.HIGH)
+        update.message.reply_text("Relay 3 turned ON")
+    elif command == "/relay3_off":
+        GPIO.output(RELAY3_PIN, GPIO.LOW)
+        update.message.reply_text("Relay 3 turned OFF")
+    elif command == "/relay4_on":
+        GPIO.output(RELAY4_PIN, GPIO.HIGH)
+        update.message.reply_text("Relay 4 turned ON")
+    elif command == "/relay4_off":
+        GPIO.output(RELAY4_PIN, GPIO.LOW)
+        update.message.reply_text("Relay 4 turned OFF")
+
+updater = Updater(TELEGRAM_BOT_TOKEN)
+dp = updater.dispatcher
+dp.add_handler(CommandHandler(["relay1_on", "relay1_off", "relay2_on", "relay2_off", "relay3_on", "relay3_off", "relay4_on", "relay4_off"], relay_control))
+updater.start_polling()
 
 reader = SimpleMFRC522()
 face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
@@ -109,32 +146,20 @@ try:
                     print(f"[INFO] Face matched - {person_name} - Access Granted")
                     print("[INFO] Unlocking Door")
                     set_servo_angle(180)
-                    
                     time.sleep(2)
                     GPIO.output(RELAY1_PIN, GPIO.HIGH)
                     GPIO.output(RELAY2_PIN, GPIO.HIGH)
                     GPIO.output(RELAY3_PIN, GPIO.LOW)
                     GPIO.output(RELAY4_PIN, GPIO.LOW)
-                    
                     print("[INFO] Locking Door")
                     set_servo_angle(0)
-                    
                     for _ in range(2):
                         GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
                         time.sleep(0.5)
                         GPIO.output(GREEN_LED_PIN, GPIO.LOW)
                         time.sleep(0.5)
-                    
                     matched = True
                     break
-                else:
-                    print("[WARNING] Unknown face detected - Access Denied")
-                
-                cv2.rectangle(img, (x, y), (x+w, y+h), (255, 0, 0), 2)
-
-            cv2.imshow("camera", img)
-            if matched or cv2.waitKey(1) & 0xFF == 27:
-                break
 
         cam.release()
         cv2.destroyAllWindows()
@@ -144,3 +169,4 @@ except KeyboardInterrupt:
     print("\n[INFO] Program interrupted. Exiting gracefully.")
     GPIO.cleanup()
     pi.stop()
+    updater.stop()
