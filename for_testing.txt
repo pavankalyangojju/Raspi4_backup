@@ -191,29 +191,9 @@ try:
                 if confidence < 40:
                     name_file = os.path.join(image_folder, "name.txt")
                     person_name = open(name_file).read().strip() if os.path.exists(name_file) else "Matched"
-                    now = datetime.now()
-                    today_str = now.strftime("%Y-%m-%d")
-                    timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                    if len([t for t in attendance_log[rfid_id] if t.startswith(today_str)]) >= 2:
-                        print("[INFO] Already taken 2 times today.")
-                        lcd_display("2 Times Done", LINE_1)
-                        lcd_display("Come Tomorrow", LINE_2)
-                        send_telegram_photo(img, f"{person_name} tried third time today.\nRFID: {rfid_id}\n[Limit Reached]")
-                        lcd_display("Limit Reached", LINE_1)
-                        lcd_display("Beep 3 Times", LINE_2)
-                        for _ in range(3):
-                            GPIO.output(BUZZER_PIN, GPIO.HIGH)
-                            time.sleep(0.7)
-                            GPIO.output(BUZZER_PIN, GPIO.LOW)
-                            time.sleep(0.3)
-                        cam.release()
-                        cv2.destroyAllWindows()
-                        time.sleep(3)
-                        matched = True
-                        break
-
-                    print(f"[INFO] Face matched - {person_name} - Attendance Taken")
+                    print(f"[INFO] Face matched - {person_name} - Access Granted")
                     lcd_display("Your Attendance", LINE_1)
                     lcd_display(f"Welcome {person_name[:9]}", LINE_2)
                     GPIO.output(BUZZER_PIN, GPIO.HIGH)
@@ -225,9 +205,7 @@ try:
 
                     rotate_servo()  # Rotate servo 0 -> 180, wait, then back
 
-                    send_telegram_photo(img, f"Attendance Taken\nName: {person_name}\nRFID: {rfid_id}\nTime: {timestamp}")
-                    attendance_log[rfid_id].append(timestamp)
-
+                    send_telegram_photo(img, f"Access Granted\nName: {person_name}\nRFID: {rfid_id}\nTime: {timestamp}")
                     matched = True
                     break
                 else:
