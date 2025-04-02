@@ -10,6 +10,8 @@ import smbus2
 import requests
 from datetime import datetime
 import tempfile
+import sys
+import subprocess
 
 # GPIO Setup
 BUZZER_PIN = 17
@@ -111,6 +113,11 @@ def rotate_servo():
 
     servo.ChangeDutyCycle(0)
 
+def restart_program():
+    print("[INFO] Restarting program due to camera error...")
+    python = sys.executable
+    os.execl(python, python, *sys.argv)
+
 lcd_init()
 lcd_display("Welcome to", LINE_1)
 lcd_display("AttendanceSystem", LINE_2)
@@ -179,7 +186,10 @@ try:
             ret, img = cam.read()
             if not ret or img is None:
                 print("[ERROR] Failed to read from camera")
-                continue
+                cam.release()
+                cv2.destroyAllWindows()
+                time.sleep(2)
+                restart_program()
 
             img = cv2.flip(img, -1)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
