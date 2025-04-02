@@ -12,14 +12,14 @@ import tempfile
 import sys
 import subprocess
 import threading
-import telepot
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
 # GPIO Setup
 BUZZER_PIN = 17
 GREEN_LED_PIN = 26
 RED_LED_PIN = 19
 SERVO_PIN = 18
-RELAY_PINS = [17, 27, 22, 5]  # GPIOs for 4 relays
+RELAY_PINS = [17, 27, 22, 5]
 
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
@@ -35,40 +35,36 @@ GPIO.output(BUZZER_PIN, GPIO.LOW)
 GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 GPIO.output(RED_LED_PIN, GPIO.LOW)
 
-# Servo PWM setup
 servo = GPIO.PWM(SERVO_PIN, 50)
 servo.start(0)
 
-# Telegram Setup
+# Telegram Bot Setup
 BOT_TOKEN = '7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI'
 CHAT_ID = '1367693706'
-bot = telepot.Bot(BOT_TOKEN)
 
-def handle_telegram(msg):
-    content_type, chat_type, chat_id = telepot.glance(msg)
-    if content_type == 'text':
-        command = msg['text'].lower()
-        if command == 'on1':
-            GPIO.output(RELAY_PINS[0], GPIO.HIGH)
-        elif command == 'off1':
-            GPIO.output(RELAY_PINS[0], GPIO.LOW)
-        elif command == 'on2':
-            GPIO.output(RELAY_PINS[1], GPIO.HIGH)
-        elif command == 'off2':
-            GPIO.output(RELAY_PINS[1], GPIO.LOW)
-        elif command == 'on3':
-            GPIO.output(RELAY_PINS[2], GPIO.HIGH)
-        elif command == 'off3':
-            GPIO.output(RELAY_PINS[2], GPIO.LOW)
-        elif command == 'on4':
-            GPIO.output(RELAY_PINS[3], GPIO.HIGH)
-        elif command == 'off4':
-            GPIO.output(RELAY_PINS[3], GPIO.LOW)
+def relay_control(update, context):
+    msg = update.message.text.lower()
+    if msg == 'on1':
+        GPIO.output(RELAY_PINS[0], GPIO.HIGH)
+    elif msg == 'off1':
+        GPIO.output(RELAY_PINS[0], GPIO.LOW)
+    elif msg == 'on2':
+        GPIO.output(RELAY_PINS[1], GPIO.HIGH)
+    elif msg == 'off2':
+        GPIO.output(RELAY_PINS[1], GPIO.LOW)
+    elif msg == 'on3':
+        GPIO.output(RELAY_PINS[2], GPIO.HIGH)
+    elif msg == 'off3':
+        GPIO.output(RELAY_PINS[2], GPIO.LOW)
+    elif msg == 'on4':
+        GPIO.output(RELAY_PINS[3], GPIO.HIGH)
+    elif msg == 'off4':
+        GPIO.output(RELAY_PINS[3], GPIO.LOW)
 
-bot.message_loop(handle_telegram)
-
-# Start message loop in background thread
-threading.Thread(target=bot.message_loop, daemon=True).start()
+updater = Updater(BOT_TOKEN, use_context=True)
+dp = updater.dispatcher
+dp.add_handler(MessageHandler(Filters.text & ~Filters.command, relay_control))
+threading.Thread(target=updater.start_polling, daemon=True).start()
 
 # LCD Setup
 LCD_ADDR = 0x27
@@ -80,8 +76,6 @@ ENABLE = 0b00000100
 LINE_1 = 0x80
 LINE_2 = 0xC0
 bus = smbus2.SMBus(1)
-
-attendance_log = defaultdict(list)
 
 def lcd_byte(bits, mode):
     high_bits = mode | (bits & 0xF0) | LCD_BACKLIGHT
@@ -99,19 +93,19 @@ def lcd_toggle_enable(bits):
     time.sleep(0.0005)
 
 def lcd_init():
-    lcd_byte(0x33, LCD_CMD)
-    lcd_byte(0x32, LCD_CMD)
-    lcd_byte(0x06, LCD_CMD)
-    lcd_byte(0x0C, LCD_CMD)
-    lcd_byte(0x28, LCD_CMD)
-    lcd_byte(0x01, LCD_CMD)
+    lcd_byte(0x33, 0)
+    lcd_byte(0x32, 0)
+    lcd_byte(0x06, 0)
+    lcd_byte(0x0C, 0)
+    lcd_byte(0x28, 0)
+    lcd_byte(0x01, 0)
     time.sleep(0.005)
 
 def lcd_display(message, line):
-    lcd_byte(line, LCD_CMD)
+    lcd_byte(line, 0)
     message = message.ljust(LCD_WIDTH, ' ')
     for char in message:
-        lcd_byte(ord(char), LCD_CHR)
+        lcd_byte(ord(char), 1)
 
 def rotate_servo():
     def angle_to_duty(angle):
@@ -127,7 +121,6 @@ def rotate_servo():
     servo.ChangeDutyCycle(0)
 
 def restart_program():
-    print("[INFO] Restarting program due to camera error...")
     python = sys.executable
     os.execl(python, python, *sys.argv)
 
@@ -136,6 +129,7 @@ lcd_display("Welcome to", LINE_1)
 lcd_display("AttendanceSystem", LINE_2)
 time.sleep(2)
 
+attendance_log = defaultdict(list)
 reader = SimpleMFRC522()
 face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
 recognizer = cv2.face.LBPHFaceRecognizer_create()
@@ -144,20 +138,15 @@ try:
     while True:
         lcd_display("Scan your", LINE_1)
         lcd_display("RFID Card...", LINE_2)
-
         cam = cv2.VideoCapture(0)
         cam.set(3, 640)
         cam.set(4, 480)
-
-        print("\n[INFO] Please scan your RFID card...")
         try:
             rfid_id, rfid_text = reader.read()
             rfid_id = str(rfid_id)
-            print(f"[INFO] RFID Scanned: {rfid_id}")
             lcd_display("RFID Found", LINE_1)
             lcd_display("Processing...", LINE_2)
         except Exception as e:
-            print(f"[ERROR] RFID Read Failed: {e}")
             lcd_display("RFID Read Error", LINE_1)
             lcd_display("Please Retry", LINE_2)
             GPIO.cleanup()
@@ -165,7 +154,6 @@ try:
 
         image_folder = os.path.join("dataset", rfid_id)
         if not os.path.exists(image_folder):
-            print(f"[ERROR] No dataset folder found for RFID {rfid_id}")
             lcd_display("No Data Found", LINE_1)
             lcd_display("Access Denied", LINE_2)
             time.sleep(3)
@@ -184,13 +172,11 @@ try:
                     ids.append(1)
             return face_samples, ids
 
-        print("[INFO] Training model from RFID-specific folder...")
         lcd_display("Training Face", LINE_1)
         lcd_display("Please Wait...", LINE_2)
         faces, ids = get_images_and_labels(image_folder)
         recognizer.train(faces, np.array(ids))
 
-        print("[INFO] Model trained. Look at the camera...")
         lcd_display("Look at Camera", LINE_1)
         lcd_display("Verifying...", LINE_2)
         matched = False
@@ -198,7 +184,6 @@ try:
         while True:
             ret, img = cam.read()
             if not ret or img is None:
-                print("[ERROR] Failed to read from camera")
                 cam.release()
                 cv2.destroyAllWindows()
                 time.sleep(2)
@@ -214,7 +199,6 @@ try:
                     name_file = os.path.join(image_folder, "name.txt")
                     person_name = open(name_file).read().strip() if os.path.exists(name_file) else "Matched"
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    print(f"[INFO] Face matched - {person_name} - Access Granted")
                     lcd_display("Your Attendance", LINE_1)
                     lcd_display(f"Welcome {person_name[:9]}", LINE_2)
                     GPIO.output(BUZZER_PIN, GPIO.HIGH)
@@ -231,7 +215,6 @@ try:
                     matched = True
                     break
                 else:
-                    print("[WARNING] Unknown face detected - Triggering buzzer")
                     lcd_display("Unknown Face", LINE_1)
                     lcd_display("Access Denied", LINE_2)
                     for _ in range(2):
@@ -254,7 +237,6 @@ try:
         time.sleep(3)
 
 except KeyboardInterrupt:
-    print("\n[INFO] Program interrupted. Exiting gracefully.")
     lcd_display("Welcome to", LINE_1)
     lcd_display("AttendanceSystem", LINE_2)
     time.sleep(2)
