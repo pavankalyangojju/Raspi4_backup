@@ -8,7 +8,7 @@ import time
 from PIL import Image
 import pigpio
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, CallbackContext
+from telegram.ext import Application, CommandHandler, CallbackContext
 
 # GPIO Setup
 GREEN_LED_PIN = 22
@@ -70,11 +70,14 @@ def relay_control(update: Update, context: CallbackContext):
         GPIO.output(RELAY4_PIN, GPIO.LOW)
         update.message.reply_text("Relay 4 turned OFF")
 
-updater = Updater(TELEGRAM_BOT_TOKEN)
-dp = updater.dispatcher
-dp.add_handler(CommandHandler(["relay1_on", "relay1_off", "relay2_on", "relay2_off", "relay3_on", "relay3_off", "relay4_on", "relay4_off"], relay_control))
-updater.start_polling()
+# Initialize Telegram bot application
+app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+app.add_handler(CommandHandler(["relay1_on", "relay1_off", "relay2_on", "relay2_off", "relay3_on", "relay3_off", "relay4_on", "relay4_off"], relay_control))
 
+# Start the bot
+app.run_polling()
+
+# RFID and Face Recognition Setup
 reader = SimpleMFRC522()
 face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
 recognizer = cv2.face.LBPHFaceRecognizer_create()
@@ -169,4 +172,4 @@ except KeyboardInterrupt:
     print("\n[INFO] Program interrupted. Exiting gracefully.")
     GPIO.cleanup()
     pi.stop()
-    updater.stop()
+    app.stop()
