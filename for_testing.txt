@@ -7,7 +7,6 @@ from mfrc522 import SimpleMFRC522
 import time
 from PIL import Image
 import smbus2
-import requests
 from datetime import datetime
 import tempfile
 import sys
@@ -45,10 +44,6 @@ LINE_1 = 0x80
 LINE_2 = 0xC0
 bus = smbus2.SMBus(1)
 
-# Telegram Config
-BOT_TOKEN = "8129064480:AAFZZjw7UTUrPgwUW33xu_B51MyJPg3WneY"
-CHAT_ID = "1367693706"
-
 # Attendance tracking
 attendance_log = defaultdict(list)
 
@@ -81,18 +76,6 @@ def lcd_display(message, line):
     message = message.ljust(LCD_WIDTH, ' ')
     for char in message:
         lcd_byte(ord(char), LCD_CHR)
-
-def send_telegram_photo(img, caption):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as temp:
-            cv2.imwrite(temp.name, img)
-            with open(temp.name, 'rb') as photo:
-                files = {'photo': photo}
-                data = {'chat_id': CHAT_ID, 'caption': caption}
-                requests.post(url, files=files, data=data)
-    except Exception as e:
-        print(f"[ERROR] Failed to send Telegram photo: {e}")
 
 def rotate_servo():
     def angle_to_duty(angle):
@@ -215,7 +198,6 @@ try:
 
                     rotate_servo()  # Rotate servo 0 -> 180, wait, then back
 
-                    send_telegram_photo(img, f"Access Granted\nName: {person_name}\nRFID: {rfid_id}\nTime: {timestamp}")
                     matched = True
                     break
                 else:
