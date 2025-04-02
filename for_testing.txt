@@ -9,12 +9,18 @@ from PIL import Image
 import pigpio
 
 # GPIO Setup
-GREEN_LED_PIN = 22
-SERVO_PIN = 17
+GREEN_LED_PIN = 26
+RELAY1_PIN = 23
+RELAY2_PIN = 24
+SERVO_PIN = 18
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(GREEN_LED_PIN, GPIO.OUT)
+GPIO.setup(RELAY1_PIN, GPIO.OUT)
+GPIO.setup(RELAY2_PIN, GPIO.OUT)
 GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+GPIO.output(RELAY1_PIN, GPIO.LOW)
+GPIO.output(RELAY2_PIN, GPIO.LOW)
 
 # Servo Setup
 pi = pigpio.pi()
@@ -97,7 +103,14 @@ try:
                     print(f"[INFO] Face matched - {person_name} - Access Granted")
                     print("[INFO] Unlocking Door")
                     set_servo_angle(180)
+                    
+                    time.sleep(2)
+                    GPIO.output(RELAY1_PIN, GPIO.HIGH)
+                    GPIO.output(RELAY2_PIN, GPIO.HIGH)
                     time.sleep(5)
+                    GPIO.output(RELAY1_PIN, GPIO.LOW)
+                    GPIO.output(RELAY2_PIN, GPIO.LOW)
+                    
                     print("[INFO] Locking Door")
                     set_servo_angle(0)
                     
