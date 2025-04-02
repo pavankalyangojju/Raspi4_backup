@@ -47,9 +47,6 @@ bus = smbus2.SMBus(1)
 BOT_TOKEN = "8129064480:AAFZZjw7UTUrPgwUW33xu_B51MyJPg3WneY"
 CHAT_ID = "1367693706"
 
-# API Endpoint
-API_URL = "http://localhost:5000/attendance"
-
 # Attendance tracking
 attendance_log = defaultdict(list)
 
@@ -94,21 +91,6 @@ def send_telegram_photo(img, caption):
                 requests.post(url, files=files, data=data)
     except Exception as e:
         print(f"[ERROR] Failed to send Telegram photo: {e}")
-
-def send_attendance_api(name, rfid, timestamp):
-    payload = {
-        "name": name,
-        "rfid": rfid,
-        "datetime": timestamp
-    }
-    try:
-        response = requests.post(API_URL, json=payload)
-        if response.status_code == 200:
-            print("[INFO] Attendance logged via API")
-        else:
-            print(f"[WARNING] API Error: {response.status_code}")
-    except Exception as e:
-        print(f"[ERROR] API send failed: {e}")
 
 def rotate_servo():
     def angle_to_duty(angle):
@@ -244,7 +226,6 @@ try:
                     rotate_servo()  # Rotate servo 0 -> 180, wait, then back
 
                     send_telegram_photo(img, f"Attendance Taken\nName: {person_name}\nRFID: {rfid_id}\nTime: {timestamp}")
-                    send_attendance_api(person_name, rfid_id, timestamp)
                     attendance_log[rfid_id].append(timestamp)
 
                     matched = True
