@@ -200,17 +200,17 @@ try:
 
                         send_telegram_photo(img, f"{person_name} tried third time today.\nRFID: {rfid_id}\n[Limit Reached]")
 
+                        lcd_display("Limit Reached", LINE_1)
+                        lcd_display("Wait 7 Sec...", LINE_2)
                         GPIO.output(BUZZER_PIN, GPIO.HIGH)
                         time.sleep(7)
                         GPIO.output(BUZZER_PIN, GPIO.LOW)
 
                         cam.release()
                         cv2.destroyAllWindows()
-                        print("[INFO] Camera paused for 3 seconds.")
+                        print("[INFO] Waiting 3 seconds before restarting loop...")
                         time.sleep(3)
-                        cam = cv2.VideoCapture(0)
-                        cam.set(3, 640)
-                        cam.set(4, 480)
+                        matched = True
                         break
 
                     print(f"[INFO] Face matched - {person_name} - Attendance Taken")
