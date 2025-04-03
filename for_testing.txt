@@ -86,7 +86,7 @@ def telegram_listener():
                 message = update.get("message", {}).get("text", "").lower()
                 chat_id = update["message"]["chat"]["id"]
                 print(f"[TELEGRAM] {message}")
-                print(message)
+
                 if message == "/light1_on":
                     GPIO.output(LIGHT1_PIN, GPIO.HIGH)
                     reply = "LIGHT1 IS ON"
@@ -104,13 +104,13 @@ def telegram_listener():
                     reply = "FAN1 IS ON"
                 elif message == "/fan1_off":
                     GPIO.output(RELAY3_PIN, GPIO.LOW)
-                    reply = "FAN1 IS OFF"              
+                    reply = "FAN1 IS OFF"
                 elif message == "/fan2_on":
                     GPIO.output(RELAY4_PIN, GPIO.HIGH)
                     reply = "FAN2 IS ON"
                 elif message == "/fan2_off":
                     GPIO.output(RELAY4_PIN, GPIO.LOW)
-                    reply = "FAN2 IS OFF" 
+                    reply = "FAN2 IS OFF"
                 elif message == "/all_on":
                     GPIO.output(LIGHT1_PIN, GPIO.HIGH)
                     GPIO.output(RELAY2_PIN, GPIO.HIGH)
@@ -122,8 +122,7 @@ def telegram_listener():
                     GPIO.output(RELAY2_PIN, GPIO.LOW)
                     GPIO.output(RELAY3_PIN, GPIO.LOW)
                     GPIO.output(RELAY4_PIN, GPIO.LOW)
-                    reply = "ALL ARE OFF" 
-
+                    reply = "ALL ARE OFF"
                 else:
                     reply = "Send /relay_on or /relay_off"
 
@@ -151,6 +150,7 @@ try:
         print(f"[INFO] RFID belongs to: {user_name}")
 
         access_granted = False
+        fail_count = 0
 
         while True:
             ret, frame = cam.read()
@@ -163,15 +163,21 @@ try:
 
             for (x, y, w, h) in faces:
                 id_predicted, confidence = recognizer.predict(gray[y:y+h, x:x+w])
-                print("conf",confidence)
+                print("conf", confidence)
+
                 if confidence < 30:
                     label = f"{user_name} ({round(confidence)}%)"
                     access_granted = True
                 else:
                     label = f"Unknown ({round(confidence)}%)"
+                    fail_count += 1
+                    if fail_count >= 4:
+                        GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                        time.sleep(5)
+                        GPIO.output(BUZZER_PIN, GPIO.LOW)
 
                 color = (0, 255, 0) if access_granted else (0, 0, 255)
-                cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
+                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
                 cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
 
                 if access_granted:
