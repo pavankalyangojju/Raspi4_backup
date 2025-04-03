@@ -16,11 +16,17 @@ GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(SERVO_PIN, GPIO.OUT)
 GPIO.setup(RELAY1_PIN, GPIO.OUT)
+GPIO.output(RELAY1_PIN, GPIO.HIGH)
 GPIO.setup(RELAY2_PIN, GPIO.OUT)
+GPIO.output(RELAY2_PIN, GPIO.HIGH)
 servo = GPIO.PWM(SERVO_PIN, 50)
 servo.start(0)
 
 # === Load Recognizer and Cascade ===
+if not os.path.exists("trainer/trainer.yml"):
+    print("[ERROR] trainer.yml not found. Please train the model first.")
+    exit()
+
 recognizer = cv2.face.LBPHFaceRecognizer_create()
 recognizer.read('trainer/trainer.yml')
 faceCascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
@@ -39,7 +45,7 @@ minW = int(0.1 * cam.get(3))
 minH = int(0.1 * cam.get(4))
 
 # === Telegram Bot Setup ===
-BOT_TOKEN = "YOUR_BOT_TOKEN"
+BOT_TOKEN = "7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 last_update_id = 0
 
@@ -117,7 +123,7 @@ try:
             for (x, y, w, h) in faces:
                 id_predicted, confidence = recognizer.predict(gray[y:y+h, x:x+w])
 
-                if confidence < 30:
+                if confidence < 30 and str(id_predicted) == rfid_id:
                     label = f"{user_name} ({round(confidence)}%)"
                     access_granted = True
                 else:
