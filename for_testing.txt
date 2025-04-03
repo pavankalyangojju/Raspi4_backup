@@ -4,13 +4,12 @@ import numpy as np
 import RPi.GPIO as GPIO
 from mfrc522 import SimpleMFRC522
 import time
-from PIL import Image
 import pandas as pd
 import threading
 import requests
 from collections import defaultdict
 
-# GPIO Setup
+# === GPIO Setup ===
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 
@@ -33,12 +32,23 @@ for pin in ALL_OUTPUTS:
 servo = GPIO.PWM(SERVO_PIN, 50)
 servo.start(0)
 
-# Telegram Bot
+# === Telegram Bot ===
 BOT_TOKEN = "7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 last_update_id = 0
 
-# Track unmatched attempts
+# === Face Recognizer & Label Map ===
+recognizer = cv2.face.LBPHFaceRecognizer_create()
+recognizer.read("trainer/trainer.yml")
+
+try:
+    label_df = pd.read_csv("trainer/labels.csv")
+    label_map = dict(zip(label_df["ID"], label_df["Name"]))
+except Exception as e:
+    print(f"[ERROR] Could not load label map: {e}")
+    label_map = {}
+
+# === Unmatched attempts tracker ===
 unmatched_counter = defaultdict(int)
 
 def open_close():
@@ -116,36 +126,14 @@ def recognize_and_act():
         print(f"[ERROR] RFID failed: {e}")
         return
 
-    dataset_path = os.path.join("dataset", rfid_id)
-    if not os.path.exists(dataset_path):
-        print(f"[ERROR] No dataset for RFID: {rfid_id}")
-        return
-
-    face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
-    recognizer = cv2.face.LBPHFaceRecognizer_create()
-
-    def load_training_data(path):
-        faces, ids = [], []
-        for file in os.listdir(path):
-            if file.endswith(".jpg"):
-                img = Image.open(os.path.join(path, file)).convert("L")
-                np_img = np.array(img, 'uint8')
-                for (x, y, w, h) in face_detector.detectMultiScale(np_img):
-                    faces.append(np_img[y:y+h, x:x+w])
-                    ids.append(1)
-        return faces, ids
-
-    print("[INFO] Training recognizer...")
-    faces, ids = load_training_data(dataset_path)
-    recognizer.train(faces, np.array(ids))
-
     try:
         df = pd.read_csv("user_data.csv")
         user_row = df[df["RFID_UID"] == int(rfid_id)]
-        user_name = user_row.iloc[0]["Name"] if not user_row.empty else "Unknown"
+        rfid_user_name = user_row.iloc[0]["Name"] if not user_row.empty else "Unknown"
     except:
-        user_name = "Unknown"
+        rfid_user_name = "Unknown"
 
+    face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
     cam = cv2.VideoCapture(0)
     cam.set(3, 640)
     cam.set(4, 480)
@@ -163,8 +151,10 @@ def recognize_and_act():
 
         for (x, y, w, h) in faces:
             id_pred, conf = recognizer.predict(gray[y:y+h, x:x+w])
-            if conf < 40:
-                print(f"[MATCH] {user_name} (Conf: {conf:.2f})")
+            predicted_name = label_map.get(id_pred, "Unknown")
+
+            if conf < 40 and predicted_name == rfid_user_name:
+                print(f"[MATCH] {predicted_name} (Conf: {conf:.2f})")
                 open_close()
                 GPIO.output(RELAY_PINS["relay1"], GPIO.HIGH)
                 GPIO.output(RELAY_PINS["relay2"], GPIO.HIGH)
@@ -176,7 +166,7 @@ def recognize_and_act():
                 break
             else:
                 unmatched_counter[rfid_id] += 1
-                print(f"[UNMATCHED] Attempt {unmatched_counter[rfid_id]}/3")
+                print(f"[UNMATCHED] {predicted_name} vs RFID({rfid_user_name}) → Attempt {unmatched_counter[rfid_id]}/3")
                 unmatched_actions()
 
                 if unmatched_counter[rfid_id] >= 3:
@@ -192,7 +182,7 @@ def recognize_and_act():
     cam.release()
     cv2.destroyAllWindows()
 
-# Start the system
+# === Main Loop ===
 if __name__ == "__main__":
     threading.Thread(target=handle_telegram, daemon=True).start()
     while True:
