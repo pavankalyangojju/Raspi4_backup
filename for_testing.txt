@@ -8,11 +8,8 @@ import time
 from PIL import Image
 import smbus2
 from datetime import datetime
-import tempfile
 import sys
-import subprocess
 import threading
-from telegram.ext import Application, MessageHandler, CommandHandler, filters
 import requests
 
 # GPIO Setup
@@ -30,8 +27,8 @@ RELAY_PINS = {
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 
-ALL_OUTPUTS = list(RELAY_PINS.values())
-for pin in ALL_OUTPUTS:
+# Initialize all outputs
+for pin in RELAY_PINS.values():
     GPIO.setup(pin, GPIO.OUT)
     GPIO.output(pin, GPIO.HIGH)
 
@@ -40,6 +37,7 @@ GPIO.setup(GREEN_LED_PIN, GPIO.OUT)
 GPIO.setup(RED_LED_PIN, GPIO.OUT)
 GPIO.setup(SERVO_PIN, GPIO.OUT)
 
+# Initialize all outputs to LOW
 GPIO.output(BUZZER_PIN, GPIO.LOW)
 GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 GPIO.output(RED_LED_PIN, GPIO.LOW)
@@ -71,38 +69,31 @@ def handle_telegram():
                     for pin in RELAY_PINS.values():
                         GPIO.output(pin, GPIO.HIGH)
                     response = "All relays turned ON"
-
                 elif msg == "/relayall_off":
                     for pin in RELAY_PINS.values():
                         GPIO.output(pin, GPIO.LOW)
                     response = "All relays turned OFF"
-
                 elif msg.startswith("/relay"):
                     parts = msg.split("_")
                     if len(parts) == 2:
                         relay, state = parts
                         relay = relay.lstrip("/")
                         if relay in RELAY_PINS:
-                            if state == "on":
-                                GPIO.output(RELAY_PINS[relay], GPIO.HIGH)
-                                response = f"{relay} turned ON"
-                            elif state == "off":
-                                GPIO.output(RELAY_PINS[relay], GPIO.LOW)
-                                response = f"{relay} turned OFF"
-                            else:
-                                response = "Invalid state command."
+                            GPIO.output(RELAY_PINS[relay], GPIO.HIGH if state == "on" else GPIO.LOW)
+                            response = f"{relay} turned {state.upper()}"
                         else:
-                            response = "Invalid relay name."
+                            response = "Invalid relay name"
                     else:
                         response = "Invalid format. Use /relay1_on"
                 else:
-                    response = "Unknown command."
+                    response = "Unknown command"
 
-                requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": response})
+                requests.post(f"{BASE_URL}/sendMessage", json={"chat_id": chat_id, "text": response})
         except Exception as e:
             print(f"[ERROR] Telegram handler: {e}")
         time.sleep(2)
 
+# Start Telegram handler thread
 threading.Thread(target=handle_telegram, daemon=True).start()
 
 # LCD Setup
@@ -115,8 +106,6 @@ ENABLE = 0b00000100
 LINE_1 = 0x80
 LINE_2 = 0xC0
 bus = smbus2.SMBus(1)
-
-attendance_log = defaultdict(list)
 
 # LCD functions
 def lcd_byte(bits, mode):
@@ -164,145 +153,201 @@ def rotate_servo():
     servo.ChangeDutyCycle(0)
 
 def restart_program():
-    print("[INFO] Restarting program due to camera error...")
+    print("[INFO] Restarting program...")
     python = sys.executable
     os.execl(python, python, *sys.argv)
 
 # Initialize LCD
 lcd_init()
-lcd_display("Welcome to", LINE_1)
-lcd_display("SmartDoor System", LINE_2)
+lcd_display("SmartDoor System", LINE_1)
+lcd_display("Initializing...", LINE_2)
 time.sleep(2)
 
+# Initialize RFID and Face Recognition
 reader = SimpleMFRC522()
 face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
 recognizer = cv2.face.LBPHFaceRecognizer_create()
+
+def get_images_and_labels(path):
+    image_paths = [os.path.join(path, f) for f in os.listdir(path) if f.endswith('.jpg')]
+    face_samples = []
+    ids = []
+    
+    for image_path in image_paths:
+        img = Image.open(image_path).convert('L')
+        img_np = np.array(img, 'uint8')
+        
+        # Detect faces with tight parameters
+        faces = face_detector.detectMultiScale(
+            img_np,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(100, 100),
+            flags=cv2.CASCADE_SCALE_IMAGE
+        )
+        
+        for (x, y, w, h) in faces:
+            # Tight crop with minimal background
+            padding = 0.1  # Very tight crop
+            x1 = max(0, int(x - w * padding))
+            y1 = max(0, int(y - h * padding))
+            x2 = min(img_np.shape[1], int(x + w * (1 + padding)))
+            y2 = min(img_np.shape[0], int(y + h * (1 + padding)))
+            
+            face_roi = img_np[y1:y2, x1:x2]
+            face_roi = cv2.resize(face_roi, (200, 200))
+            face_samples.append(face_roi)
+            ids.append(1)
+            
+    return face_samples, np.array(ids)
 
 try:
     while True:
         lcd_display("Scan your", LINE_1)
         lcd_display("RFID Card...", LINE_2)
 
+        # Initialize camera with optimal settings
         cam = cv2.VideoCapture(0)
-        cam.set(3, 640)
-        cam.set(4, 480)
+        cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cam.set(cv2.CAP_PROP_FPS, 30)
 
-        print("\n[INFO] Please scan your RFID card...")
+        # RFID Reading
         try:
-            rfid_id, rfid_text = reader.read()
+            rfid_id, _ = reader.read()
             rfid_id = str(rfid_id)
             print(f"[INFO] RFID Scanned: {rfid_id}")
             lcd_display("RFID Found", LINE_1)
             lcd_display("Processing...", LINE_2)
         except Exception as e:
             print(f"[ERROR] RFID Read Failed: {e}")
-            lcd_display("RFID Read Error", LINE_1)
-            lcd_display("Please Retry", LINE_2)
-            GPIO.cleanup()
-            break
+            lcd_display("RFID Error", LINE_1)
+            lcd_display("Try Again", LINE_2)
+            time.sleep(2)
+            continue
 
+        # Check for dataset
         image_folder = os.path.join("dataset", rfid_id)
         if not os.path.exists(image_folder):
-            print(f"[ERROR] No dataset folder found for RFID {rfid_id}")
+            print(f"[ERROR] No dataset for RFID {rfid_id}")
             lcd_display("No Data Found", LINE_1)
+            lcd_display("Access Denied", LINE_2)
+            GPIO.output(RED_LED_PIN, GPIO.HIGH)
+            time.sleep(3)
+            GPIO.output(RED_LED_PIN, GPIO.LOW)
+            continue
+
+        # Train with specific dataset
+        print("[INFO] Training model...")
+        lcd_display("Training Face", LINE_1)
+        lcd_display("Please Wait...", LINE_2)
+        
+        faces, ids = get_images_and_labels(image_folder)
+        if len(faces) == 0:
+            print("[ERROR] No faces found in dataset")
+            lcd_display("Invalid Dataset", LINE_1)
             lcd_display("Access Denied", LINE_2)
             time.sleep(3)
             continue
+            
+        recognizer.train(faces, ids)
 
-        def get_images_and_labels(path):
-            image_paths = [os.path.join(path, f) for f in os.listdir(path) if f.endswith('.jpg')]
-            face_samples = []
-            ids = []
-            for image_path in image_paths:
-                img = Image.open(image_path).convert('L')
-                img_np = np.array(img, 'uint8')
-                faces = face_detector.detectMultiScale(img_np)
-                for (x, y, w, h) in faces:
-                    face_samples.append(img_np[y:y+h, x:x+w])
-                    ids.append(1)
-            return face_samples, ids
-
-        print("[INFO] Training model from RFID-specific folder...")
-        lcd_display("Training Face", LINE_1)
-        lcd_display("Please Wait...", LINE_2)
-        faces, ids = get_images_and_labels(image_folder)
-        recognizer.train(faces, np.array(ids))
-
-        print("[INFO] Model trained. Look at the camera...")
+        # Face Recognition
+        print("[INFO] Face verification starting...")
         lcd_display("Look at Camera", LINE_1)
         lcd_display("Verifying...", LINE_2)
+        
         matched = False
+        start_time = time.time()
+        timeout = 10  # Seconds to try recognition
 
-        while True:
+        while time.time() - start_time < timeout and not matched:
             ret, img = cam.read()
-            if not ret or img is None:
-                print("[ERROR] Failed to read from camera")
-                cam.release()
-                cv2.destroyAllWindows()
-                time.sleep(2)
-                restart_program()
+            if not ret:
+                print("[ERROR] Camera read failed")
+                break
 
             img = cv2.flip(img, 1)
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            faces = face_detector.detectMultiScale(gray, 1.3, 5)
+            gray = cv2.equalizeHist(gray)
+            
+            # Detect faces with tight parameters
+            faces = face_detector.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(100, 100),
+                flags=cv2.CASCADE_SCALE_IMAGE
+            )
 
             for (x, y, w, h) in faces:
-                id_pred, confidence = recognizer.predict(gray[y:y+h, x:x+w])
-                print("Confidence: ", confidence)
+                # Tight crop with minimal background
+                padding = 0.1
+                x1 = max(0, int(x - w * padding))
+                y1 = max(0, int(y - h * padding))
+                x2 = min(gray.shape[1], int(x + w * (1 + padding)))
+                y2 = min(gray.shape[0], int(y + h * (1 + padding)))
+                
+                face_roi = gray[y1:y2, x1:x2]
+                face_roi = cv2.resize(face_roi, (200, 200))
+                
+                # Predict with confidence
+                id_pred, confidence = recognizer.predict(face_roi)
+                print(f"Confidence: {confidence}")
 
-                if confidence < 40:
+                if confidence < 40:  # Lower is better
                     name_file = os.path.join(image_folder, "name.txt")
-                    person_name = open(name_file).read().strip() if os.path.exists(name_file) else "Matched"
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-                    print(f"[INFO] Face matched - {person_name} - Access Granted")
-                    lcd_display("Your Door open", LINE_1)
-                    lcd_display(f"Welcome {person_name[:9]}", LINE_2)
-                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                    person_name = open(name_file).read().strip() if os.path.exists(name_file) else "Authorized"
+                    
+                    print(f"[SUCCESS] {person_name} verified")
+                    lcd_display("Access Granted", LINE_1)
+                    lcd_display(f"Welcome {person_name[:10]}", LINE_2)
+                    
+                    # Visual feedback
                     GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
-                    time.sleep(0.2)
+                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                    time.sleep(0.1)
                     GPIO.output(BUZZER_PIN, GPIO.LOW)
-                    time.sleep(3)
-                    GPIO.output(GREEN_LED_PIN, GPIO.LOW)
-
-                    # Only activate servo when face matches
+                    
+                    # Activate door mechanisms
                     rotate_servo()
-
                     GPIO.output(RELAY_PINS["relay1"], GPIO.HIGH)
                     GPIO.output(RELAY_PINS["relay3"], GPIO.HIGH)
-                    GPIO.output(RELAY_PINS["relay2"], GPIO.LOW)
-                    GPIO.output(RELAY_PINS["relay4"], GPIO.LOW)
-
+                    
                     matched = True
                     break
                 else:
-                    print("[WARNING] Unknown face detected - Triggering buzzer")
-                    lcd_display("Unknown Face", LINE_1)
-                    lcd_display("Access Denied", LINE_2)
-                    for _ in range(2):
-                        GPIO.output(BUZZER_PIN, GPIO.HIGH)
-                        time.sleep(0.2)
-                        GPIO.output(BUZZER_PIN, GPIO.LOW)
-                        time.sleep(0.2)
+                    print("[WARNING] Face not recognized")
                     GPIO.output(RED_LED_PIN, GPIO.HIGH)
-                    time.sleep(3)
+                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                    time.sleep(0.1)
+                    GPIO.output(BUZZER_PIN, GPIO.LOW)
+                    time.sleep(0.1)
+                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                    time.sleep(0.1)
+                    GPIO.output(BUZZER_PIN, GPIO.LOW)
                     GPIO.output(RED_LED_PIN, GPIO.LOW)
-                    lcd_display("Put Correct", LINE_1)
-                    lcd_display("Face", LINE_2)
-                    matched = False  # Ensure matched is False when face doesn't match
 
-            cv2.imshow("camera", img)
-            if matched or cv2.waitKey(1) & 0xFF == 27:
+            # Show camera feed
+            cv2.imshow("Face Verification", img)
+            if cv2.waitKey(1) & 0xFF == 27:
                 break
 
+        # Cleanup
         cam.release()
         cv2.destroyAllWindows()
-        time.sleep(3)
+        GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+        GPIO.output(RED_LED_PIN, GPIO.LOW)
+        
+        if not matched:
+            lcd_display("Verification", LINE_1)
+            lcd_display("Failed", LINE_2)
+            time.sleep(2)
 
 except KeyboardInterrupt:
-    print("\n[INFO] Program interrupted. Exiting gracefully.")
-    lcd_display("Welcome to", LINE_1)
-    lcd_display("SmartDoor System", LINE_2)
-    time.sleep(2)
+    print("\n[INFO] Shutting down...")
+    lcd_display("System", LINE_1)
+    lcd_display("Shutting Down", LINE_2)
     servo.stop()
     GPIO.cleanup()
+    cv2.destroyAllWindows()
