@@ -19,16 +19,12 @@ GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(SERVO_PIN, GPIO.OUT)
 GPIO.setup(BUZZER_PIN, GPIO.OUT)
-# Relays
 GPIO.setup(LIGHT1_PIN, GPIO.OUT)
 GPIO.output(LIGHT1_PIN, GPIO.LOW)
-
 GPIO.setup(RELAY2_PIN, GPIO.OUT)
 GPIO.output(RELAY2_PIN, GPIO.LOW)
-
 GPIO.setup(RELAY3_PIN, GPIO.OUT)
 GPIO.output(RELAY3_PIN, GPIO.LOW)
-
 GPIO.setup(RELAY4_PIN, GPIO.OUT)
 GPIO.output(RELAY4_PIN, GPIO.LOW)
 
@@ -58,6 +54,24 @@ BOT_TOKEN = "7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 last_update_id = 0
 
+# === Servo control via Telegram ===
+def servo_from_telegram():
+    print("[TELEGRAM] Rotating servo via Telegram...")
+    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+    time.sleep(2)
+    GPIO.output(BUZZER_PIN, GPIO.LOW)
+    servo.ChangeDutyCycle(2.5)  # 0 degrees
+    time.sleep(1)
+    servo.ChangeDutyCycle(12.5)  # 180 degrees
+    time.sleep(1)
+    servo.ChangeDutyCycle(0)
+    time.sleep(5)
+    servo.ChangeDutyCycle(2.5)  # back to 0
+    time.sleep(1)
+    servo.ChangeDutyCycle(0)
+    print("[TELEGRAM] Servo returned to closed position.")
+
+# === Servo control via Face Recognition ===
 def rotate_servo():
     print("[INFO] Rotating servo & activating relays...")
     GPIO.output(LIGHT1_PIN, GPIO.HIGH)
@@ -74,6 +88,7 @@ def rotate_servo():
     servo.ChangeDutyCycle(0)
     print("[INFO] Servo returned. Relays remain ON.")
 
+# === Telegram Bot Listener ===
 def telegram_listener():
     global last_update_id
     print("[INFO] Telegram listener started...")
@@ -123,17 +138,21 @@ def telegram_listener():
                     GPIO.output(RELAY3_PIN, GPIO.LOW)
                     GPIO.output(RELAY4_PIN, GPIO.LOW)
                     reply = "ALL ARE OFF"
+                elif message == "/door_open":
+                    reply = "Rotating servo from Telegram..."
+                    threading.Thread(target=servo_from_telegram).start()
                 else:
-                    reply = "Send /relay_on or /relay_off"
+                    reply = "Send a valid command."
 
                 requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": reply})
         except Exception as e:
             print(f"[ERROR] Telegram: {e}")
         time.sleep(2)
 
-# === Run Telegram Listener in Background ===
+# === Start Telegram Listener ===
 threading.Thread(target=telegram_listener, daemon=True).start()
 
+# === Main Loop ===
 try:
     while True:
         print("[INFO] Waiting for RFID scan...")
@@ -150,7 +169,6 @@ try:
         print(f"[INFO] RFID belongs to: {user_name}")
 
         access_granted = False
-        fail_count = 0
 
         while True:
             ret, frame = cam.read()
@@ -162,19 +180,13 @@ try:
             faces = faceCascade.detectMultiScale(gray, 1.1, 7, minSize=(minW, minH))
 
             for (x, y, w, h) in faces:
-                id_predicted, confidence = recognizer.predict(gray[y:y+h, x:x+w])
+                id_predicted, confidence = recognizer.predict(gray[y:y + h, x:x + w])
                 print("conf", confidence)
-
                 if confidence < 30:
                     label = f"{user_name} ({round(confidence)}%)"
                     access_granted = True
                 else:
                     label = f"Unknown ({round(confidence)}%)"
-                    fail_count += 1
-                    if fail_count >= 4:
-                        GPIO.output(BUZZER_PIN, GPIO.HIGH)
-                        time.sleep(5)
-                        GPIO.output(BUZZER_PIN, GPIO.LOW)
 
                 color = (0, 255, 0) if access_granted else (0, 0, 255)
                 cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
