@@ -248,7 +248,7 @@ try:
 
             for (x, y, w, h) in faces:
                 id_pred, confidence = recognizer.predict(gray[y:y+h, x:x+w])
-                print("cobf: ", confidence)
+                print("Confidence: ", confidence)
 
                 if confidence < 40:
                     name_file = os.path.join(image_folder, "name.txt")
@@ -265,6 +265,7 @@ try:
                     time.sleep(3)
                     GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 
+                    # Only activate servo when face matches
                     rotate_servo()
 
                     GPIO.output(RELAY_PINS["relay1"], GPIO.HIGH)
@@ -288,6 +289,7 @@ try:
                     GPIO.output(RED_LED_PIN, GPIO.LOW)
                     lcd_display("Put Correct", LINE_1)
                     lcd_display("Face", LINE_2)
+                    matched = False  # Ensure matched is False when face doesn't match
 
             cv2.imshow("camera", img)
             if matched or cv2.waitKey(1) & 0xFF == 27:
