@@ -10,23 +10,32 @@ from mfrc522 import SimpleMFRC522
 
 # === GPIO Setup ===
 SERVO_PIN = 21
-RELAY1_PIN = 26
+BUZZER_PIN = 20
+LIGHT1_PIN = 26
 RELAY2_PIN = 19
+RELAY3_PIN = 13
+RELAY4_PIN = 6
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(SERVO_PIN, GPIO.OUT)
-GPIO.setup(RELAY1_PIN, GPIO.OUT)
-GPIO.output(RELAY1_PIN, GPIO.HIGH)
+GPIO.setup(BUZZER_PIN, GPIO.OUT)
+# Relays
+GPIO.setup(LIGHT1_PIN, GPIO.OUT)
+GPIO.output(LIGHT1_PIN, GPIO.LOW)
+
 GPIO.setup(RELAY2_PIN, GPIO.OUT)
-GPIO.output(RELAY2_PIN, GPIO.HIGH)
+GPIO.output(RELAY2_PIN, GPIO.LOW)
+
+GPIO.setup(RELAY3_PIN, GPIO.OUT)
+GPIO.output(RELAY3_PIN, GPIO.LOW)
+
+GPIO.setup(RELAY4_PIN, GPIO.OUT)
+GPIO.output(RELAY4_PIN, GPIO.LOW)
+
 servo = GPIO.PWM(SERVO_PIN, 50)
 servo.start(0)
 
 # === Load Recognizer and Cascade ===
-if not os.path.exists("trainer/trainer.yml"):
-    print("[ERROR] trainer.yml not found. Please train the model first.")
-    exit()
-
 recognizer = cv2.face.LBPHFaceRecognizer_create()
 recognizer.read('trainer/trainer.yml')
 faceCascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
@@ -51,8 +60,11 @@ last_update_id = 0
 
 def rotate_servo():
     print("[INFO] Rotating servo & activating relays...")
-    GPIO.output(RELAY1_PIN, GPIO.HIGH)
+    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
     GPIO.output(RELAY2_PIN, GPIO.HIGH)
+    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+    time.sleep(2)
+    GPIO.output(BUZZER_PIN, GPIO.LOW)
     servo.ChangeDutyCycle(7.5)
     time.sleep(1)
     servo.ChangeDutyCycle(0)
@@ -74,15 +86,44 @@ def telegram_listener():
                 message = update.get("message", {}).get("text", "").lower()
                 chat_id = update["message"]["chat"]["id"]
                 print(f"[TELEGRAM] {message}")
-
-                if message == "/relay_on":
-                    GPIO.output(RELAY1_PIN, GPIO.HIGH)
+                print(message)
+                if message == "/light1_on":
+                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
+                    reply = "LIGHT1 IS ON"
+                elif message == "/light1_off":
+                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
+                    reply = "LIGHT1 IS OFF"
+                elif message == "/light2_on":
                     GPIO.output(RELAY2_PIN, GPIO.HIGH)
-                    reply = "Relays turned ON"
-                elif message == "/relay_off":
-                    GPIO.output(RELAY1_PIN, GPIO.LOW)
+                    reply = "LIGHT2 IS ON"
+                elif message == "/light2_off":
                     GPIO.output(RELAY2_PIN, GPIO.LOW)
-                    reply = "Relays turned OFF"
+                    reply = "LIGHT2 IS OFF"
+                elif message == "/fan1_on":
+                    GPIO.output(RELAY3_PIN, GPIO.HIGH)
+                    reply = "FAN1 IS ON"
+                elif message == "/fan1_off":
+                    GPIO.output(RELAY3_PIN, GPIO.LOW)
+                    reply = "FAN1 IS OFF"              
+                elif message == "/fan2_on":
+                    GPIO.output(RELAY4_PIN, GPIO.HIGH)
+                    reply = "FAN2 IS ON"
+                elif message == "/fan2_off":
+                    GPIO.output(RELAY4_PIN, GPIO.LOW)
+                    reply = "FAN2 IS OFF" 
+                elif message == "/all_on":
+                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
+                    GPIO.output(RELAY2_PIN, GPIO.HIGH)
+                    GPIO.output(RELAY3_PIN, GPIO.HIGH)
+                    GPIO.output(RELAY4_PIN, GPIO.HIGH)
+                    reply = "ALL ARE ON"
+                elif message == "/all_off":
+                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
+                    GPIO.output(RELAY2_PIN, GPIO.LOW)
+                    GPIO.output(RELAY3_PIN, GPIO.LOW)
+                    GPIO.output(RELAY4_PIN, GPIO.LOW)
+                    reply = "ALL ARE OFF" 
+
                 else:
                     reply = "Send /relay_on or /relay_off"
 
@@ -122,8 +163,8 @@ try:
 
             for (x, y, w, h) in faces:
                 id_predicted, confidence = recognizer.predict(gray[y:y+h, x:x+w])
-
-                if confidence < 30 and str(id_predicted) == rfid_id:
+                print("conf",confidence)
+                if confidence < 30:
                     label = f"{user_name} ({round(confidence)}%)"
                     access_granted = True
                 else:
