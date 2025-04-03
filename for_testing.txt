@@ -6,14 +6,10 @@ import RPi.GPIO as GPIO
 from mfrc522 import SimpleMFRC522
 import time
 from PIL import Image
-import smbus2
-from datetime import datetime
-import tempfile
 import sys
-import subprocess
-import threading
-from telegram.ext import Application, MessageHandler, CommandHandler, filters
 import requests
+import threading
+from datetime import datetime
 
 # GPIO Setup
 BUZZER_PIN = 17
@@ -105,49 +101,7 @@ def handle_telegram():
 
 threading.Thread(target=handle_telegram, daemon=True).start()
 
-# LCD Setup
-LCD_ADDR = 0x27
-LCD_WIDTH = 16
-LCD_CHR = 1
-LCD_CMD = 0
-LCD_BACKLIGHT = 0x08
-ENABLE = 0b00000100
-LINE_1 = 0x80
-LINE_2 = 0xC0
-bus = smbus2.SMBus(1)
-
 attendance_log = defaultdict(list)
-
-# LCD functions
-def lcd_byte(bits, mode):
-    high_bits = mode | (bits & 0xF0) | LCD_BACKLIGHT
-    low_bits = mode | ((bits << 4) & 0xF0) | LCD_BACKLIGHT
-    bus.write_byte(LCD_ADDR, high_bits)
-    lcd_toggle_enable(high_bits)
-    bus.write_byte(LCD_ADDR, low_bits)
-    lcd_toggle_enable(low_bits)
-
-def lcd_toggle_enable(bits):
-    time.sleep(0.0005)
-    bus.write_byte(LCD_ADDR, bits | ENABLE)
-    time.sleep(0.0005)
-    bus.write_byte(LCD_ADDR, bits & ~ENABLE)
-    time.sleep(0.0005)
-
-def lcd_init():
-    lcd_byte(0x33, LCD_CMD)
-    lcd_byte(0x32, LCD_CMD)
-    lcd_byte(0x06, LCD_CMD)
-    lcd_byte(0x0C, LCD_CMD)
-    lcd_byte(0x28, LCD_CMD)
-    lcd_byte(0x01, LCD_CMD)
-    time.sleep(0.005)
-
-def lcd_display(message, line):
-    lcd_byte(line, LCD_CMD)
-    message = message.ljust(LCD_WIDTH, ' ')
-    for char in message:
-        lcd_byte(ord(char), LCD_CHR)
 
 def rotate_servo():
     def angle_to_duty(angle):
@@ -168,44 +122,30 @@ def restart_program():
     python = sys.executable
     os.execl(python, python, *sys.argv)
 
-# Initialize LCD
-lcd_init()
-lcd_display("Welcome to", LINE_1)
-lcd_display("SmartDoor System", LINE_2)
-time.sleep(2)
-
 reader = SimpleMFRC522()
 face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
 recognizer = cv2.face.LBPHFaceRecognizer_create()
 
 try:
     while True:
-        lcd_display("Scan your", LINE_1)
-        lcd_display("RFID Card...", LINE_2)
+        print("[INFO] Waiting for RFID scan...")
 
         cam = cv2.VideoCapture(0)
         cam.set(3, 640)
         cam.set(4, 480)
 
-        print("\n[INFO] Please scan your RFID card...")
         try:
             rfid_id, rfid_text = reader.read()
             rfid_id = str(rfid_id)
             print(f"[INFO] RFID Scanned: {rfid_id}")
-            lcd_display("RFID Found", LINE_1)
-            lcd_display("Processing...", LINE_2)
         except Exception as e:
             print(f"[ERROR] RFID Read Failed: {e}")
-            lcd_display("RFID Read Error", LINE_1)
-            lcd_display("Please Retry", LINE_2)
             GPIO.cleanup()
             break
 
         image_folder = os.path.join("dataset", rfid_id)
         if not os.path.exists(image_folder):
             print(f"[ERROR] No dataset folder found for RFID {rfid_id}")
-            lcd_display("No Data Found", LINE_1)
-            lcd_display("Access Denied", LINE_2)
             time.sleep(3)
             continue
 
@@ -222,15 +162,11 @@ try:
                     ids.append(1)
             return face_samples, ids
 
-        print("[INFO] Training model from RFID-specific folder...")
-        lcd_display("Training Face", LINE_1)
-        lcd_display("Please Wait...", LINE_2)
+        print("[INFO] Training model...")
         faces, ids = get_images_and_labels(image_folder)
         recognizer.train(faces, np.array(ids))
 
-        print("[INFO] Model trained. Look at the camera...")
-        lcd_display("Look at Camera", LINE_1)
-        lcd_display("Verifying...", LINE_2)
+        print("[INFO] Model trained. Looking for face...")
         matched = False
 
         while True:
@@ -255,8 +191,6 @@ try:
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
                     print(f"[INFO] Face matched - {person_name} - Access Granted")
-                    lcd_display("Your Door open", LINE_1)
-                    lcd_display(f"Welcome {person_name[:9]}", LINE_2)
                     GPIO.output(BUZZER_PIN, GPIO.HIGH)
                     GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
                     time.sleep(0.2)
@@ -274,9 +208,7 @@ try:
                     matched = True
                     break
                 else:
-                    print("[WARNING] Unknown face detected - Triggering buzzer")
-                    lcd_display("Unknown Face", LINE_1)
-                    lcd_display("Access Denied", LINE_2)
+                    print("[WARNING] Unknown face detected - Access Denied")
                     for _ in range(2):
                         GPIO.output(BUZZER_PIN, GPIO.HIGH)
                         time.sleep(0.2)
@@ -285,8 +217,6 @@ try:
                     GPIO.output(RED_LED_PIN, GPIO.HIGH)
                     time.sleep(3)
                     GPIO.output(RED_LED_PIN, GPIO.LOW)
-                    lcd_display("Put Correct", LINE_1)
-                    lcd_display("Face", LINE_2)
 
             cv2.imshow("camera", img)
             if matched or cv2.waitKey(1) & 0xFF == 27:
@@ -297,9 +227,6 @@ try:
         time.sleep(3)
 
 except KeyboardInterrupt:
-    print("\n[INFO] Program interrupted. Exiting gracefully.")
-    lcd_display("Welcome to", LINE_1)
-    lcd_display("SmartDoor System", LINE_2)
-    time.sleep(2)
+    print("\n[INFO] Program interrupted. Cleaning up...")
     servo.stop()
     GPIO.cleanup()
