@@ -1,178 +1,64 @@
 import cv2
-import os
 import numpy as np
-import RPi.GPIO as GPIO
-from mfrc522 import SimpleMFRC522
-import time
+from PIL import Image
+import os
 import pandas as pd
-import threading
-import requests
-from collections import defaultdict
 
-# === GPIO Setup ===
-GPIO.setwarnings(False)
-GPIO.setmode(GPIO.BCM)
+# Paths
+dataset_path = 'faces'
+trainer_path = 'trainer'
+trainer_file = os.path.join(trainer_path, 'trainer.yml')
 
-RELAY_PINS = {
-    "relay1": 26,
-    "relay2": 19,
-    "relay3": 13,
-    "relay4": 6,
-}
-SERVO_PIN = 21
-GREEN_LED = 22
-RED_LED = 27
-BUZZER = 5
+if not os.path.exists(trainer_path):
+    os.makedirs(trainer_path)
 
-ALL_OUTPUTS = list(RELAY_PINS.values()) + [SERVO_PIN, GREEN_LED, RED_LED, BUZZER]
-for pin in ALL_OUTPUTS:
-    GPIO.setup(pin, GPIO.OUT)
-    GPIO.output(pin, GPIO.LOW)
-
-servo = GPIO.PWM(SERVO_PIN, 50)
-servo.start(0)
-
-# === Telegram Bot ===
-BOT_TOKEN = "7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI"
-BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-last_update_id = 0
-
-# === Face Recognizer & Label Map ===
 recognizer = cv2.face.LBPHFaceRecognizer_create()
-recognizer.read("trainer/trainer.yml")
+detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
 
-try:
-    label_df = pd.read_csv("trainer/labels.csv")
-    label_map = dict(zip(label_df["ID"], label_df["Name"]))
-except Exception as e:
-    print(f"[ERROR] Could not load label map: {e}")
-    label_map = {}
+# Read RFID list from user_data.csv
+user_df = pd.read_csv("user_data.csv")
+valid_rfids = set(user_df['RFID_UID'].astype(str))
 
-def open_close():
-    servo.ChangeDutyCycle(12.5)
-    time.sleep(1)
-    servo.ChangeDutyCycle(0)
-    time.sleep(2)
-    servo.ChangeDutyCycle(2.5)
-    time.sleep(1)
-    servo.ChangeDutyCycle(0)
-
-def handle_telegram():
-    global last_update_id
-    print("[INFO] Telegram listener started...")
-    while True:
-        try:
-            url = f"{BASE_URL}/getUpdates?offset={last_update_id + 1}&timeout=10"
-            res = requests.get(url).json()
-
-            for update in res.get("result", []):
-                last_update_id = update["update_id"]
-                msg = update.get("message", {}).get("text", "").lower()
-                chat_id = update["message"]["chat"]["id"]
-                print(f"[TELEGRAM] Received: {msg}")
-
-                if msg == "/relayall_on":
-                    for pin in RELAY_PINS.values():
-                        GPIO.output(pin, GPIO.HIGH)
-                    requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": "All relays turned ON"})
-
-                elif msg == "/relayall_off":
-                    for pin in RELAY_PINS.values():
-                        GPIO.output(pin, GPIO.LOW)
-                    requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": "All relays turned OFF"})
-
-                elif msg.startswith("/relay"):
-                    parts = msg.split("_")
-                    if len(parts) == 2:
-                        relay, state = parts
-                        relay = relay.lstrip("/")
-                        if relay in RELAY_PINS:
-                            GPIO.output(RELAY_PINS[relay], GPIO.HIGH if state == "on" else GPIO.LOW)
-                            status = f"{relay} turned {state.upper()}"
-                            requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": status})
-        except Exception as e:
-            print(f"[ERROR] Telegram handler: {e}")
-        time.sleep(2)
-
-def matched_actions():
-    GPIO.output(GREEN_LED, GPIO.HIGH)
-    GPIO.output(BUZZER, GPIO.HIGH)
-    time.sleep(2)
-    GPIO.output(BUZZER, GPIO.LOW)
-    time.sleep(3)
-    GPIO.output(GREEN_LED, GPIO.LOW)
-
-def unmatched_actions():
-    GPIO.output(RED_LED, GPIO.HIGH)
-    for _ in range(2):
-        GPIO.output(BUZZER, GPIO.HIGH)
-        time.sleep(0.5)
-        GPIO.output(BUZZER, GPIO.LOW)
-        time.sleep(0.5)
-    time.sleep(3)
-    GPIO.output(RED_LED, GPIO.LOW)
-
-def recognize_and_act():
-    reader = SimpleMFRC522()
+def extract_rfid(filename):
     try:
-        print("[INFO] Waiting for RFID...")
-        rfid_id, _ = reader.read()
-        rfid_id = str(rfid_id).strip()
-        print(f"[INFO] RFID Scanned: {rfid_id}")
-    except Exception as e:
-        print(f"[ERROR] RFID failed: {e}")
-        return
-
-    try:
-        df = pd.read_csv("user_data.csv")
-        user_row = df[df["RFID_UID"] == int(rfid_id)]
-        rfid_user_name = user_row.iloc[0]["Name"] if not user_row.empty else "Unknown"
+        return filename.split('_')[0]  # '1234567890'
     except:
-        rfid_user_name = "Unknown"
+        return None
 
-    face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
-    cam = cv2.VideoCapture(0)
-    cam.set(3, 640)
-    cam.set(4, 480)
+def getImagesAndLabels(path):
+    face_samples = []
+    ids = []
 
-    matched = False
-    while True:
-        ret, frame = cam.read()
-        if not ret or frame is None:
-            print("[ERROR] Camera failed to read")
+    for image_file in os.listdir(path):
+        if not image_file.lower().endswith(('.jpg', '.png')):
             continue
 
-        frame = cv2.flip(frame, 1)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_detector.detectMultiScale(gray, 1.1, 7)
+        image_path = os.path.join(path, image_file)
+        rfid = extract_rfid(image_file)
+
+        if rfid is None or rfid not in valid_rfids:
+            print(f"[WARNING] Skipping file: {image_file} — RFID not in user_data.csv")
+            continue
+
+        try:
+            pil_img = Image.open(image_path).convert('L')  # Grayscale
+        except Exception as e:
+            print(f"[WARNING] Skipping image {image_path}: {e}")
+            continue
+
+        img_numpy = np.array(pil_img, 'uint8')
+        faces = detector.detectMultiScale(img_numpy)
 
         for (x, y, w, h) in faces:
-            id_pred, conf = recognizer.predict(gray[y:y+h, x:x+w])
-            predicted_name = label_map.get(id_pred, "Unknown")
+            face_samples.append(img_numpy[y:y+h, x:x+w])
+            ids.append(int(rfid))  # Use RFID UID as training ID
 
-            if conf < 40 and predicted_name == rfid_user_name:
-                print(f"[MATCH] {predicted_name} (Conf: {conf:.2f})")
-                open_close()
-                GPIO.output(RELAY_PINS["relay1"], GPIO.HIGH)
-                GPIO.output(RELAY_PINS["relay2"], GPIO.HIGH)
-                GPIO.output(RELAY_PINS["relay3"], GPIO.LOW)
-                GPIO.output(RELAY_PINS["relay4"], GPIO.LOW)
-                matched_actions()
-                matched = True
-                break
-            else:
-                print(f"[UNMATCHED] {predicted_name} vs RFID({rfid_user_name}) → Retry allowed")
-                unmatched_actions()
+    return face_samples, ids
 
-        cv2.imshow("Face Recognition", frame)
-        if matched or cv2.waitKey(1) & 0xFF == 27:
-            break
+print("\n[INFO] Training faces. Please wait...")
+faces, ids = getImagesAndLabels(dataset_path)
+recognizer.train(faces, np.array(ids))
+recognizer.write(trainer_file)
 
-    cam.release()
-    cv2.destroyAllWindows()
-
-# === Main Loop ===
-if __name__ == "__main__":
-    threading.Thread(target=handle_telegram, daemon=True).start()
-    while True:
-        recognize_and_act()
+print(f"\n[INFO] {len(set(ids))} unique RFID IDs trained.")
+print(f"[INFO] Model saved to {trainer_file}")
