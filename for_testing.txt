@@ -9,6 +9,13 @@ import pandas as pd
 import threading
 import requests
 from mfrc522 import SimpleMFRC522
+import sys
+
+# === Restart logic ===
+def restart_program():
+    print("[INFO] Restarting program...")
+    python = sys.executable
+    os.execl(python, python, *sys.argv)
 
 # === GPIO Setup ===
 SERVO_PIN = 21
@@ -43,13 +50,6 @@ user_df = pd.read_csv("user_data.csv")
 
 # === RFID Setup ===
 rfid_reader = SimpleMFRC522()
-
-# === Camera Setup ===
-cam = cv2.VideoCapture(0)
-cam.set(3, 640)
-cam.set(4, 480)
-minW = int(0.1 * cam.get(3))
-minH = int(0.1 * cam.get(4))
 
 # === Telegram Bot Setup ===
 BOT_TOKEN = "7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI"
@@ -89,6 +89,8 @@ def rotate_servo():
     time.sleep(1)
     servo.ChangeDutyCycle(0)
     print("[INFO] Servo returned. Relays remain ON.")
+    cam.release()
+    cv2.destroyAllWindows()
 
 # === Telegram Bot Listener ===
 def telegram_listener():
@@ -154,6 +156,13 @@ def telegram_listener():
 # === Start Telegram Listener ===
 threading.Thread(target=telegram_listener, daemon=True).start()
 
+# === Camera Setup ===
+cam = cv2.VideoCapture(0)
+cam.set(3, 640)
+cam.set(4, 480)
+minW = int(0.1 * cam.get(3))
+minH = int(0.1 * cam.get(4))
+
 # === Main Loop ===
 try:
     while True:
@@ -174,17 +183,26 @@ try:
 
         while True:
             ret, frame = cam.read()
-            if not ret:
-                print("[ERROR] Failed to capture image")
-                continue
+            if not ret or frame is None:
+                print("[ERROR] Failed to capture image from camera")
+                time.sleep(2)
+                restart_program()
 
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            try:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            except cv2.error as e:
+                print(f"[ERROR] OpenCV Error: {e}")
+                cam.release()
+                cv2.destroyAllWindows()
+                time.sleep(2)
+                restart_program()
+
             faces = faceCascade.detectMultiScale(gray, 1.1, 7, minSize=(minW, minH))
 
             for (x, y, w, h) in faces:
                 id_predicted, confidence = recognizer.predict(gray[y:y + h, x:x + w])
                 print("conf", confidence)
-                if confidence < 30:
+                if confidence < 35:
                     label = f"{user_name} ({round(confidence)}%)"
                     access_granted = True
                 else:
