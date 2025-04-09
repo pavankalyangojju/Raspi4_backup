@@ -1,217 +1,229 @@
-# main_rfid_face_telegram.py
-import cv2
-import numpy as np
-import os
-import RPi.GPIO as GPIO
-import time
-import pandas as pd
 import threading
-import requests
+from collections import defaultdict
+import cv2
+import os
+import numpy as np
+import RPi.GPIO as GPIO
 from mfrc522 import SimpleMFRC522
-import sys
-
-def restart_program():
-    python = sys.executable
-    os.execl(python, python, *sys.argv)
+import time
+from PIL import Image
+import smbus2
+import requests
+from datetime import datetime
+import tempfile
 
 # GPIO Setup
-SERVO_PIN = 21
-BUZZER_PIN = 20
-LIGHT1_PIN = 26
-RELAY2_PIN = 19
-RELAY3_PIN = 13
-RELAY4_PIN = 6
-
+BUZZER_PIN = 17
+GREEN_LED_PIN = 26
+RED_LED_PIN = 19
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(SERVO_PIN, GPIO.OUT)
 GPIO.setup(BUZZER_PIN, GPIO.OUT)
-GPIO.setup(LIGHT1_PIN, GPIO.OUT)
-GPIO.output(LIGHT1_PIN, GPIO.LOW)
-GPIO.setup(RELAY2_PIN, GPIO.OUT)
-GPIO.output(RELAY2_PIN, GPIO.LOW)
-GPIO.setup(RELAY3_PIN, GPIO.OUT)
-GPIO.output(RELAY3_PIN, GPIO.LOW)
-GPIO.setup(RELAY4_PIN, GPIO.OUT)
-GPIO.output(RELAY4_PIN, GPIO.LOW)
+GPIO.setup(GREEN_LED_PIN, GPIO.OUT)
+GPIO.setup(RED_LED_PIN, GPIO.OUT)
+GPIO.output(BUZZER_PIN, GPIO.LOW)
+GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+GPIO.output(RED_LED_PIN, GPIO.LOW)
 
-servo = GPIO.PWM(SERVO_PIN, 50)
-servo.start(0)
+# LCD Setup
+LCD_ADDR = 0x27
+LCD_WIDTH = 16
+LCD_CHR = 1
+LCD_CMD = 0
+LCD_BACKLIGHT = 0x08
+ENABLE = 0b00000100
+LINE_1 = 0x80
+LINE_2 = 0xC0
+bus = smbus2.SMBus(1)
 
-# Load Recognizer
-recognizer = cv2.face.EigenFaceRecognizer_create()
-recognizer.read('trainer/trainer_eigen.yml')
-faceCascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+# Telegram Config
+BOT_TOKEN = "your_bot_token"
+CHAT_ID = "your_chat_id"
 
-# User data
-user_df = pd.read_csv("user_data.csv")
-labels_df = pd.read_csv("trainer/labels.csv")
-labels_df.columns = labels_df.columns.str.strip()
-labels_df['ID'] = labels_df['ID'].astype(int)
-labels_df['Name'] = labels_df['Name'].astype(str).str.strip()
+# API Endpoint
+API_URL = "http://localhost:5000/attendance"
+attendance_log = defaultdict(list)
 
-# RFID
-rfid_reader = SimpleMFRC522()
+# Flags for thread communication
+rfid_ready = threading.Event()
+face_recognition_trigger = threading.Event()
+stop_threads = threading.Event()
+current_rfid = {"id": None}
 
-# Telegram
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-last_update_id = 0
+# LCD Functions
+def lcd_byte(bits, mode):
+    high_bits = mode | (bits & 0xF0) | LCD_BACKLIGHT
+    low_bits = mode | ((bits << 4) & 0xF0) | LCD_BACKLIGHT
+    bus.write_byte(LCD_ADDR, high_bits)
+    lcd_toggle_enable(high_bits)
+    bus.write_byte(LCD_ADDR, low_bits)
+    lcd_toggle_enable(low_bits)
 
-def servo_from_telegram():
-    GPIO.output(BUZZER_PIN, GPIO.HIGH)
-    time.sleep(2)
-    GPIO.output(BUZZER_PIN, GPIO.LOW)
-    servo.ChangeDutyCycle(2.5)
-    time.sleep(1)
-    servo.ChangeDutyCycle(12.5)
-    time.sleep(1)
-    servo.ChangeDutyCycle(0)
-    time.sleep(5)
-    servo.ChangeDutyCycle(2.5)
-    time.sleep(1)
-    servo.ChangeDutyCycle(0)
+def lcd_toggle_enable(bits):
+    time.sleep(0.0005)
+    bus.write_byte(LCD_ADDR, bits | ENABLE)
+    time.sleep(0.0005)
+    bus.write_byte(LCD_ADDR, bits & ~ENABLE)
+    time.sleep(0.0005)
 
-def rotate_servo():
-    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
-    GPIO.output(RELAY2_PIN, GPIO.HIGH)
-    GPIO.output(BUZZER_PIN, GPIO.HIGH)
-    time.sleep(2)
-    GPIO.output(BUZZER_PIN, GPIO.LOW)
-    servo.ChangeDutyCycle(7.5)
-    time.sleep(1)
-    servo.ChangeDutyCycle(0)
-    time.sleep(2)
-    servo.ChangeDutyCycle(2.5)
-    time.sleep(1)
-    servo.ChangeDutyCycle(0)
-    cam.release()
-    cv2.destroyAllWindows()
+def lcd_init():
+    lcd_byte(0x33, LCD_CMD)
+    lcd_byte(0x32, LCD_CMD)
+    lcd_byte(0x06, LCD_CMD)
+    lcd_byte(0x0C, LCD_CMD)
+    lcd_byte(0x28, LCD_CMD)
+    lcd_byte(0x01, LCD_CMD)
+    time.sleep(0.005)
 
-def telegram_listener():
-    global last_update_id
-    while True:
+def lcd_display(message, line):
+    lcd_byte(line, LCD_CMD)
+    message = message.ljust(LCD_WIDTH, ' ')
+    for char in message:
+        lcd_byte(ord(char), LCD_CHR)
+
+def send_telegram_photo(img, caption):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as temp:
+            cv2.imwrite(temp.name, img)
+            with open(temp.name, 'rb') as photo:
+                files = {'photo': photo}
+                data = {'chat_id': CHAT_ID, 'caption': caption}
+                requests.post(url, files=files, data=data)
+    except Exception as e:
+        print(f"[ERROR] Telegram photo send failed: {e}")
+
+def send_attendance_api(name, rfid, timestamp):
+    payload = {"name": name, "rfid": rfid, "datetime": timestamp}
+    try:
+        response = requests.post(API_URL, json=payload)
+        print("[INFO] API response:", response.status_code)
+    except Exception as e:
+        print("[ERROR] API failed:", e)
+
+def rfid_reader_thread():
+    reader = SimpleMFRC522()
+    while not stop_threads.is_set():
+        lcd_display("Scan RFID Card", LINE_1)
+        lcd_display("", LINE_2)
         try:
-            url = f"{BASE_URL}/getUpdates?offset={last_update_id + 1}&timeout=10"
-            response = requests.get(url).json()
-            for update in response.get("result", []):
-                last_update_id = update["update_id"]
-                message = update.get("message", {}).get("text", "").lower()
-                chat_id = update["message"]["chat"]["id"]
-
-                reply = "Invalid command."
-                if message == "/light1_on":
-                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
-                    reply = "LIGHT1 IS ON"
-                elif message == "/light1_off":
-                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
-                    reply = "LIGHT1 IS OFF"
-                elif message == "/light2_on":
-                    GPIO.output(RELAY2_PIN, GPIO.HIGH)
-                    reply = "LIGHT2 IS ON"
-                elif message == "/light2_off":
-                    GPIO.output(RELAY2_PIN, GPIO.LOW)
-                    reply = "LIGHT2 IS OFF"
-                elif message == "/fan1_on":
-                    GPIO.output(RELAY3_PIN, GPIO.HIGH)
-                    reply = "FAN1 IS ON"
-                elif message == "/fan1_off":
-                    GPIO.output(RELAY3_PIN, GPIO.LOW)
-                    reply = "FAN1 IS OFF"
-                elif message == "/fan2_on":
-                    GPIO.output(RELAY4_PIN, GPIO.HIGH)
-                    reply = "FAN2 IS ON"
-                elif message == "/fan2_off":
-                    GPIO.output(RELAY4_PIN, GPIO.LOW)
-                    reply = "FAN2 IS OFF"
-                elif message == "/all_on":
-                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
-                    GPIO.output(RELAY2_PIN, GPIO.HIGH)
-                    GPIO.output(RELAY3_PIN, GPIO.HIGH)
-                    GPIO.output(RELAY4_PIN, GPIO.HIGH)
-                    reply = "ALL ARE ON"
-                elif message == "/all_off":
-                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
-                    GPIO.output(RELAY2_PIN, GPIO.LOW)
-                    GPIO.output(RELAY3_PIN, GPIO.LOW)
-                    GPIO.output(RELAY4_PIN, GPIO.LOW)
-                    reply = "ALL ARE OFF"
-                elif message == "/door_open":
-                    reply = "Door opening..."
-                    threading.Thread(target=servo_from_telegram).start()
-
-                requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": reply})
+            rfid_id, _ = reader.read()
+            current_rfid["id"] = str(rfid_id)
+            rfid_ready.set()
+            face_recognition_trigger.set()
+            time.sleep(1)
         except Exception as e:
-            print(f"[ERROR] Telegram: {e}")
-        time.sleep(2)
+            print("[ERROR] RFID read error:", e)
+        time.sleep(1)
 
-# Start telegram listener
-threading.Thread(target=telegram_listener, daemon=True).start()
+def face_recognition_thread():
+    face_detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
 
-# Camera setup
-cam = cv2.VideoCapture(0)
-cam.set(3, 640)
-cam.set(4, 480)
-minW = int(0.1 * cam.get(3))
-minH = int(0.1 * cam.get(4))
+    while not stop_threads.is_set():
+        face_recognition_trigger.wait()
+        rfid = current_rfid["id"]
+        image_folder = os.path.join("dataset", rfid)
 
-try:
-    while True:
-        print("[INFO] Waiting for RFID scan...")
-        rfid_id, _ = rfid_reader.read()
-        rfid_id = str(rfid_id).strip()
-        print(f"[INFO] Scanned RFID: {rfid_id}")
-
-        user_row = user_df[user_df['RFID_UID'] == int(rfid_id)]
-        if user_row.empty:
-            print("[ERROR] RFID not registered.")
+        if not os.path.exists(image_folder):
+            lcd_display("Face Not Found", LINE_1)
+            lcd_display("Access Denied", LINE_2)
+            GPIO.output(RED_LED_PIN, GPIO.HIGH)
+            time.sleep(2)
+            GPIO.output(RED_LED_PIN, GPIO.LOW)
+            face_recognition_trigger.clear()
             continue
 
-        user_name = user_row.iloc[0]['Name']
-        print(f"[INFO] RFID belongs to: {user_name}")
+        # Train model
+        def get_images_and_labels(path):
+            face_samples = []
+            ids = []
+            for file in os.listdir(path):
+                if file.endswith('.jpg'):
+                    img = Image.open(os.path.join(path, file)).convert('L')
+                    img_np = np.array(img, 'uint8')
+                    faces = face_detector.detectMultiScale(img_np)
+                    for (x, y, w, h) in faces:
+                        face_samples.append(img_np[y:y+h, x:x+w])
+                        ids.append(1)
+            return face_samples, ids
 
-        access_granted = False
+        faces, ids = get_images_and_labels(image_folder)
+        recognizer.train(faces, np.array(ids))
+
+        cam = cv2.VideoCapture(0)
+        cam.set(3, 640)
+        cam.set(4, 480)
+        lcd_display("Face Detecting", LINE_1)
 
         while True:
-            ret, frame = cam.read()
-            if not ret:
-                restart_program()
-
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = faceCascade.detectMultiScale(gray, 1.1, 7, minSize=(minW, minH))
+            ret, img = cam.read()
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            faces = face_detector.detectMultiScale(gray, 1.3, 5)
 
             for (x, y, w, h) in faces:
-                roi = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
-                id_predicted, confidence = recognizer.predict(roi)
-                matched_row = labels_df[labels_df['ID'] == id_predicted]
+                id_pred, confidence = recognizer.predict(gray[y:y+h, x:x+w])
+                if confidence < 40:
+                    name_file = os.path.join(image_folder, "name.txt")
+                    name = open(name_file).read().strip() if os.path.exists(name_file) else "Unknown"
 
-                if confidence < 4000:  # Lower threshold for EigenFace
-                    predicted_name = matched_row.iloc[0]['Name'] if not matched_row.empty else "Unknown"
-                    if predicted_name == user_name:
-                        access_granted = True
-                        label = f"✔ {predicted_name} ({round(confidence)})"
-                    else:
-                        label = f"✖ Mismatch: RFID={user_name}, Face={predicted_name}"
-                else:
-                    label = f"Unknown ({round(confidence)})"
+                    now = datetime.now()
+                    today_str = now.strftime("%Y-%m-%d")
+                    timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
 
-                color = (0, 255, 0) if access_granted else (0, 0, 255)
-                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-                cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+                    if len([t for t in attendance_log[rfid] if t.startswith(today_str)]) >= 2:
+                        lcd_display("Limit Reached", LINE_1)
+                        lcd_display("Try Tomorrow", LINE_2)
+                        send_telegram_photo(img, f"{name} tried third time today.")
+                        time.sleep(2)
+                        break
 
-                if access_granted:
-                    rotate_servo()
+                    lcd_display("Access Granted", LINE_1)
+                    lcd_display(name[:16], LINE_2)
+                    GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                    time.sleep(1)
+                    GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+                    GPIO.output(BUZZER_PIN, GPIO.LOW)
+
+                    attendance_log[rfid].append(timestamp)
+                    send_attendance_api(name, rfid, timestamp)
+                    send_telegram_photo(img, f"{name} marked present.\nTime: {timestamp}")
+                    time.sleep(2)
                     break
-
-            cv2.imshow('Face Recognition', frame)
-            if access_granted or cv2.waitKey(10) & 0xFF == 27:
+                else:
+                    lcd_display("Face Unknown", LINE_1)
+                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                    time.sleep(0.5)
+                    GPIO.output(BUZZER_PIN, GPIO.LOW)
+            if cv2.waitKey(1) & 0xFF == 27:
                 break
 
-except KeyboardInterrupt:
-    print("[INFO] Program terminated.")
+        cam.release()
+        cv2.destroyAllWindows()
+        face_recognition_trigger.clear()
 
-finally:
-    cam.release()
-    cv2.destroyAllWindows()
-    servo.stop()
-    GPIO.cleanup()
+# ---- MAIN ----
+if __name__ == "__main__":
+    lcd_init()
+    lcd_display("Attendance System", LINE_1)
+    lcd_display("Initializing...", LINE_2)
+    time.sleep(2)
+
+    t1 = threading.Thread(target=rfid_reader_thread)
+    t2 = threading.Thread(target=face_recognition_thread)
+
+    t1.start()
+    t2.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("[INFO] Shutting down...")
+        stop_threads.set()
+        t1.join()
+        t2.join()
+        lcd_display("System Stopped", LINE_1)
+        lcd_display("", LINE_2)
+        GPIO.cleanup()
