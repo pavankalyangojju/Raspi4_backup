@@ -2,25 +2,25 @@ import cv2
 import numpy as np
 import tflite_runtime.interpreter as tflite
 import os, json, time, csv
+import threading
 from datetime import datetime
+from queue import Queue
 from mfrc522 import SimpleMFRC522
 from smbus2 import SMBus
 from RPLCD.i2c import CharLCD
 
-# === LCD setup ===
+# === LCD Setup ===
 lcd = CharLCD(i2c_expander='PCF8574', address=0x27, port=1, cols=16, rows=2)
-lcd.clear()
 
-# === RFID ===
+# === RFID Reader ===
 reader = SimpleMFRC522()
 
-# === Load TFLite model ===
+# === FaceNet Model ===
 interpreter = tflite.Interpreter(model_path="facenet.tflite")
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
-# === Preprocessing ===
 def preprocess_face(face_img):
     face = cv2.resize(face_img, (160, 160))
     face = face.astype('float32')
@@ -38,7 +38,7 @@ def get_embedding(face_img):
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-# === Load known faces and embeddings ===
+# === Load Known Faces ===
 def load_known_faces():
     known_embeddings = {}
     for name in os.listdir("dataset"):
@@ -51,103 +51,126 @@ def load_known_faces():
 
 known_faces = load_known_faces()
 
-# === Load RFID mapping ===
+# === Load RFID Mappings ===
 with open("rfid_map.json", "r") as f:
-    rfid_map = json.load(f)  # e.g., {"Alice": "123456789", "Bob": "987654321"}
+    rfid_map = json.load(f)
 
-# === CSV file setup ===
+# === Attendance CSV ===
 attendance_log_file = "attendance_log.csv"
-
-# Check if the CSV file exists, if not, create it and write the header
 if not os.path.exists(attendance_log_file):
     with open(attendance_log_file, mode='w', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(["Name", "RFID", "Date", "Time"])
 
-# === Start Camera ===
-cap = cv2.VideoCapture(0)
+# === Shared Queues ===
+rfid_queue = Queue()
+lcd_queue = Queue()
 
-# Check if camera is opened
-if not cap.isOpened():
-    print("[ERROR] Camera not accessible!")
-    exit()
-
-print("[INFO] Ready for attendance")
-
-while True:
-    try:
-        lcd.clear()
-        lcd.write_string("Scan RFID Card...")
-        print("Waiting for RFID...")
-        id, text = reader.read()
-        print("id:", id)
-        print("text:", text)
-        scanned_uid = str(id).strip()
-
-        matched_user = None
-        for name, uid in rfid_map.items():
-            if uid == scanned_uid:
-                matched_user = name
-                break
-
-        if not matched_user:
+# === LCD Thread ===
+def lcd_thread():
+    while True:
+        try:
+            line1, line2, delay = lcd_queue.get()
             lcd.clear()
-            lcd.write_string("Unknown RFID")
-            time.sleep(2)
-            continue
+            lcd.write_string(line1)
+            if line2:
+                lcd.cursor_pos = (1, 0)
+                lcd.write_string(line2)
+            time.sleep(delay)
+        except Exception as e:
+            print(f"[ERROR] LCD Thread: {e}")
 
-        lcd.clear()
-        lcd.write_string("Show your face")
-        print(f"[INFO] RFID matched with {matched_user}, waiting for face...")
+# === RFID Reader Thread ===
+def rfid_thread():
+    while True:
+        try:
+            lcd_queue.put(("Scan RFID Card...", "", 0))
+            print("[INFO] Waiting for RFID...")
+            id, _ = reader.read()
+            scanned_uid = str(id).strip()
 
-        # Wait for 3 seconds before starting face validation
-        time.sleep(3)  # Add delay for user to prepare
+            matched_user = None
+            for name, uid in rfid_map.items():
+                if uid == scanned_uid:
+                    matched_user = name
+                    break
 
-        while True:  # Keep the camera window open until a match is found or process interrupted
-            ret, frame = cap.read()
-            if not ret:
-                print("[ERROR] Failed to capture frame.")
+            if not matched_user:
+                lcd_queue.put(("Unknown RFID", "", 2))
+                print("[WARNING] Unknown RFID")
                 continue
 
-            # Show the captured frame for debugging
-            cv2.imshow("Camera Feed", frame)
+            lcd_queue.put(("RFID OK", "Show your face", 2))
+            print(f"[INFO] RFID matched with {matched_user}, waiting for face...")
+            rfid_queue.put((matched_user, scanned_uid))
 
-            embedding = get_embedding(frame)
-            similarity = cosine_similarity(embedding, known_faces.get(matched_user))
+        except Exception as e:
+            print(f"[ERROR] RFID Thread: {e}")
 
-            if similarity > 0.7:
-                lcd.clear()
-                lcd.write_string(f"{matched_user}")
-                lcd.cursor_pos = (1, 0)
-                lcd.write_string("Attendance Marked")
-                print(f"[SUCCESS] {matched_user} - Match: {similarity:.2f}")
+# === Face Recognition Thread ===
+def face_thread():
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("[ERROR] Camera not accessible!")
+        lcd_queue.put(("Camera Error", "", 0))
+        return
 
-                # Capture current date and time for the attendance log
-                current_time = datetime.now()
-                date = current_time.strftime("%Y-%m-%d")
-                time_str = current_time.strftime("%H:%M:%S")
+    while True:
+        if not rfid_queue.empty():
+            matched_user, scanned_uid = rfid_queue.get()
 
-                # Write the data to the CSV file
-                with open(attendance_log_file, mode='a', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow([matched_user, scanned_uid, date, time_str])
+            success = False
+            start_time = time.time()
+            while time.time() - start_time < 15:
+                ret, frame = cap.read()
+                if not ret:
+                    continue
 
-                time.sleep(3)
-                cv2.destroyAllWindows()  # Close the camera window after matching
-                break  # Exit the loop after a successful match
-            else:
-                lcd.clear()
-                lcd.write_string("Face Not Match")
-                print("[WARNING] Face not matched")
-                time.sleep(2)
+                cv2.imshow("Camera Feed", frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
 
-            # Make sure the window updates every time
-            if cv2.waitKey(1) & 0xFF == ord('q'):  # Press 'q' to quit the camera window if needed
-                break
+                embedding = get_embedding(frame)
+                similarity = cosine_similarity(embedding, known_faces.get(matched_user))
 
-    except KeyboardInterrupt:
-        break
+                if similarity > 0.75:
+                    lcd_queue.put((matched_user, "Attendance Marked", 3))
+                    print(f"[SUCCESS] {matched_user} - Match: {similarity:.2f}")
 
-cap.release()
-cv2.destroyAllWindows()  # Ensure all windows are closed properly
-lcd.clear()
+                    now = datetime.now()
+                    with open(attendance_log_file, mode='a', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow([matched_user, scanned_uid, now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S")])
+                    success = True
+                    break
+                else:
+                    lcd_queue.put(("Face Not Match", "", 2))
+                    print("[INFO] Face not matched")
+
+            if not success:
+                print("[INFO] Face match timeout.")
+            cv2.destroyAllWindows()
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+# === Start All Threads ===
+try:
+    threads = [
+        threading.Thread(target=lcd_thread, daemon=True),
+        threading.Thread(target=rfid_thread, daemon=True),
+        threading.Thread(target=face_thread, daemon=True),
+    ]
+
+    for t in threads:
+        t.start()
+
+    print("[INFO] System is running. Press Ctrl+C to exit.")
+    while True:
+        time.sleep(1)
+
+except KeyboardInterrupt:
+    print("[INFO] Interrupted by user.")
+    lcd_queue.put(("System Exit", "", 2))
+    time.sleep(2)
+    lcd.clear()
