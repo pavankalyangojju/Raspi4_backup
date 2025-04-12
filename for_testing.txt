@@ -9,13 +9,14 @@ from mfrc522 import SimpleMFRC522
 from smbus2 import SMBus
 from RPLCD.i2c import CharLCD
 
-# === LCD Setup ===
+# === LCD setup ===
 lcd = CharLCD(i2c_expander='PCF8574', address=0x27, port=1, cols=16, rows=2)
+lcd.clear()
 
-# === RFID Reader ===
+# === RFID ===
 reader = SimpleMFRC522()
 
-# === FaceNet Model ===
+# === TFLite FaceNet Model ===
 interpreter = tflite.Interpreter(model_path="facenet.tflite")
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
@@ -38,7 +39,7 @@ def get_embedding(face_img):
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-# === Load Known Faces ===
+# === Load face embeddings ===
 def load_known_faces():
     known_embeddings = {}
     for name in os.listdir("dataset"):
@@ -62,29 +63,15 @@ if not os.path.exists(attendance_log_file):
         writer = csv.writer(file)
         writer.writerow(["Name", "RFID", "Date", "Time"])
 
-# === Shared Queues ===
+# === Shared Queue for RFID → Face thread communication ===
 rfid_queue = Queue()
-lcd_queue = Queue()
-
-# === LCD Thread ===
-def lcd_thread():
-    while True:
-        try:
-            line1, line2, delay = lcd_queue.get()
-            lcd.clear()
-            lcd.write_string(line1)
-            if line2:
-                lcd.cursor_pos = (1, 0)
-                lcd.write_string(line2)
-            time.sleep(delay)
-        except Exception as e:
-            print(f"[ERROR] LCD Thread: {e}")
 
 # === RFID Reader Thread ===
 def rfid_thread():
     while True:
         try:
-            lcd_queue.put(("Scan RFID Card...", "", 0))
+            lcd.clear()
+            lcd.write_string("Scan RFID Card...")
             print("[INFO] Waiting for RFID...")
             id, _ = reader.read()
             scanned_uid = str(id).strip()
@@ -96,13 +83,18 @@ def rfid_thread():
                     break
 
             if not matched_user:
-                lcd_queue.put(("Unknown RFID", "", 2))
+                lcd.clear()
+                lcd.write_string("Unknown RFID")
                 print("[WARNING] Unknown RFID")
+                time.sleep(2)
                 continue
 
-            lcd_queue.put(("RFID OK", "Show your face", 2))
+            lcd.clear()
+            lcd.write_string("Show your face")
             print(f"[INFO] RFID matched with {matched_user}, waiting for face...")
+
             rfid_queue.put((matched_user, scanned_uid))
+            time.sleep(5)
 
         except Exception as e:
             print(f"[ERROR] RFID Thread: {e}")
@@ -112,16 +104,16 @@ def face_thread():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("[ERROR] Camera not accessible!")
-        lcd_queue.put(("Camera Error", "", 0))
         return
 
+    print("[INFO] Face recognition thread started.")
     while True:
         if not rfid_queue.empty():
             matched_user, scanned_uid = rfid_queue.get()
 
             success = False
             start_time = time.time()
-            while time.time() - start_time < 15:
+            while time.time() - start_time < 15:  # timeout after 15s
                 ret, frame = cap.read()
                 if not ret:
                     continue
@@ -134,18 +126,24 @@ def face_thread():
                 similarity = cosine_similarity(embedding, known_faces.get(matched_user))
 
                 if similarity > 0.75:
-                    lcd_queue.put((matched_user, "Attendance Marked", 3))
+                    lcd.clear()
+                    lcd.write_string(f"{matched_user}")
+                    lcd.cursor_pos = (1, 0)
+                    lcd.write_string("Attendance Marked")
                     print(f"[SUCCESS] {matched_user} - Match: {similarity:.2f}")
 
                     now = datetime.now()
                     with open(attendance_log_file, mode='a', newline='') as file:
                         writer = csv.writer(file)
                         writer.writerow([matched_user, scanned_uid, now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S")])
+
                     success = True
                     break
                 else:
-                    lcd_queue.put(("Face Not Match", "", 2))
+                    lcd.clear()
+                    lcd.write_string("Face Not Match")
                     print("[INFO] Face not matched")
+                    time.sleep(2)
 
             if not success:
                 print("[INFO] Face match timeout.")
@@ -154,23 +152,16 @@ def face_thread():
     cap.release()
     cv2.destroyAllWindows()
 
-# === Start All Threads ===
+# === Main Thread Starter ===
 try:
-    threads = [
-        threading.Thread(target=lcd_thread, daemon=True),
-        threading.Thread(target=rfid_thread, daemon=True),
-        threading.Thread(target=face_thread, daemon=True),
-    ]
+    t1 = threading.Thread(target=rfid_thread, daemon=True)
+    t2 = threading.Thread(target=face_thread, daemon=True)
+    t1.start()
+    t2.start()
 
-    for t in threads:
-        t.start()
-
-    print("[INFO] System is running. Press Ctrl+C to exit.")
     while True:
         time.sleep(1)
 
 except KeyboardInterrupt:
     print("[INFO] Interrupted by user.")
-    lcd_queue.put(("System Exit", "", 2))
-    time.sleep(2)
     lcd.clear()
