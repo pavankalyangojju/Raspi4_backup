@@ -1,7 +1,8 @@
 import cv2
 import numpy as np
 import tflite_runtime.interpreter as tflite
-import os, json, time
+import os, json, time, csv
+from datetime import datetime
 from mfrc522 import SimpleMFRC522
 from smbus2 import SMBus
 from RPLCD.i2c import CharLCD
@@ -53,6 +54,15 @@ known_faces = load_known_faces()
 # === Load RFID mapping ===
 with open("rfid_map.json", "r") as f:
     rfid_map = json.load(f)  # e.g., {"Alice": "123456789", "Bob": "987654321"}
+
+# === CSV file setup ===
+attendance_log_file = "attendance_log.csv"
+
+# Check if the CSV file exists, if not, create it and write the header
+if not os.path.exists(attendance_log_file):
+    with open(attendance_log_file, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["Name", "RFID", "Date", "Time"])
 
 # === Start Camera ===
 cap = cv2.VideoCapture(0)
@@ -111,6 +121,17 @@ while True:
                 lcd.cursor_pos = (1, 0)
                 lcd.write_string("Attendance Marked")
                 print(f"[SUCCESS] {matched_user} - Match: {similarity:.2f}")
+
+                # Capture current date and time for the attendance log
+                current_time = datetime.now()
+                date = current_time.strftime("%Y-%m-%d")
+                time_str = current_time.strftime("%H:%M:%S")
+
+                # Write the data to the CSV file
+                with open(attendance_log_file, mode='a', newline='') as file:
+                    writer = csv.writer(file)
+                    writer.writerow([matched_user, scanned_uid, date, time_str])
+
                 time.sleep(3)
                 cv2.destroyAllWindows()  # Close the camera window after matching
                 break  # Exit the loop after a successful match
