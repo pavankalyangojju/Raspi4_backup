@@ -31,6 +31,17 @@ lcd_thread.start()
 # === RFID Reader ===
 reader = SimpleMFRC522()
 
+# === Haar Cascade for Face Detection ===
+face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+
+def detect_face(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
+    if len(faces) == 0:
+        return None
+    x, y, w, h = faces[0]
+    return frame[y:y+h, x:x+w]
+
 # === Load TFLite model ===
 interpreter = tflite.Interpreter(model_path="facenet.tflite")
 interpreter.allocate_tensors()
@@ -62,8 +73,10 @@ def load_known_faces():
         path = f"dataset/{name}/face.jpg"
         if os.path.exists(path):
             img = cv2.imread(path)
-            embedding = get_embedding(img)
-            known_embeddings[name] = embedding
+            face = detect_face(img)
+            if face is not None:
+                embedding = get_embedding(face)
+                known_embeddings[name] = embedding
     return known_embeddings
 
 known_faces = load_known_faces()
@@ -117,7 +130,10 @@ def main():
             lcd_queue.put(("Show your face", "", 0))
             print(f"[INFO] RFID matched with {matched_user}, waiting for face...")
 
-            while True:
+            similarities = []
+            frames_checked = 0
+
+            while frames_checked < 5:
                 ret, frame = cap.read()
                 if not ret:
                     print("[ERROR] Failed to capture frame.")
@@ -127,12 +143,25 @@ def main():
 
                 cv2.imshow("Camera Feed", frame)
 
-                embedding = get_embedding(frame)
-                similarity = cosine_similarity(embedding, known_faces.get(matched_user))
+                face = detect_face(frame)
+                if face is not None:
+                    embedding = get_embedding(face)
+                    sim = cosine_similarity(embedding, known_faces.get(matched_user))
+                    similarities.append(sim)
+                    frames_checked += 1
 
-                if similarity > 0.75:
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
+                time.sleep(0.1)
+
+            if similarities:
+                avg_similarity = np.mean(similarities)
+                print(f"[INFO] Avg similarity: {avg_similarity:.2f}")
+
+                if avg_similarity > 0.9:
                     lcd_queue.put((matched_user, "Attendance Marked", 2))
-                    print(f"[SUCCESS] {matched_user} - Match: {similarity:.2f}")
+                    print(f"[SUCCESS] {matched_user} - Match: {avg_similarity:.2f}")
 
                     current_time = datetime.now()
                     date = current_time.strftime("%Y-%m-%d")
@@ -144,14 +173,16 @@ def main():
 
                     cap.release()
                     cv2.destroyAllWindows()
-                    return  # Restart loop for next person
-
+                    return
+                elif avg_similarity > 0.75:
+                    lcd_queue.put(("Low Confidence", "", 2))
+                    print("[WARNING] Match with low confidence.")
                 else:
                     lcd_queue.put(("Face Not Match", "", 1))
                     print("[WARNING] Face not matched")
-
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+            else:
+                lcd_queue.put(("No Face Found", "", 1))
+                print("[INFO] No face detected")
 
     except KeyboardInterrupt:
         print("[INFO] Interrupted by user.")
