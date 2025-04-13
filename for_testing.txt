@@ -1,5 +1,4 @@
 import cv2
-#/home/pi/Desktop/shyam
 import numpy as np
 import tflite_runtime.interpreter as tflite
 import os, json, time, csv, sys
@@ -37,6 +36,9 @@ interpreter = tflite.Interpreter(model_path="facenet.tflite")
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
+
+# === Face Detection ===
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
 # === Preprocessing ===
 def preprocess_face(face_img):
@@ -102,8 +104,8 @@ def main():
             lcd_queue.put(("Scan RFID Card...", "", 0))
             print("Waiting for RFID...")
             id, text = reader.read()
-            print("id:", id)
             scanned_uid = str(id).strip()
+            print("RFID scanned:", scanned_uid)
 
             matched_user = None
             for name, uid in rfid_map.items():
@@ -126,11 +128,27 @@ def main():
                     cv2.destroyAllWindows()
                     restart_program()
 
-                cv2.imshow("Camera Feed", frame)
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
 
-                embedding = get_embedding(frame)
-                similarity = cosine_similarity(embedding, known_faces.get(matched_user))
-                print(similarity)
+                if len(faces) == 0:
+                    lcd_queue.put(("No face found", "", 1))
+                    print("[WARNING] No face detected")
+                    continue
+
+                # Use first detected face
+                (x, y, w, h) = faces[0]
+                face_img = frame[y:y+h, x:x+w]
+
+                embedding = get_embedding(face_img)
+                known_embedding = known_faces.get(matched_user)
+
+                if known_embedding is None:
+                    lcd_queue.put(("Face Not Found", "", 2))
+                    break
+
+                similarity = cosine_similarity(embedding, known_embedding)
+                print(f"[DEBUG] Similarity: {similarity:.4f}")
 
                 if similarity > 0.85:
                     lcd_queue.put((matched_user, "Attendance Marked", 2))
