@@ -280,8 +280,8 @@ def main():
                         writer.writerow([matched_user, scanned_uid, date, time_str])
 
                     GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
-                    rotate_servo()  # Rotate servo to unlock door
                     time.sleep(2)
+                    rotate_servo()  # Rotate servo to unlock door
                     cap.release()
                     cv2.destroyAllWindows()
                     return  # Restart loop for next person
