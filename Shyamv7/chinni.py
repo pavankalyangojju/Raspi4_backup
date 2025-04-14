@@ -15,15 +15,23 @@ BUZZER_PIN = 17
 GREEN_LED_PIN = 26
 RED_LED_PIN = 19
 SERVO_PIN = 21
+LIGHT1_PIN = 22  # Example GPIO pin for LIGHT1
+RELAY2_PIN = 23  # Example GPIO pin for RELAY2
+
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(BUZZER_PIN, GPIO.OUT)
 GPIO.setup(GREEN_LED_PIN, GPIO.OUT)
 GPIO.setup(RED_LED_PIN, GPIO.OUT)
 GPIO.setup(SERVO_PIN, GPIO.OUT)
+GPIO.setup(LIGHT1_PIN, GPIO.OUT)  # Setup LIGHT1_PIN
+GPIO.setup(RELAY2_PIN, GPIO.OUT)  # Setup RELAY2_PIN
+
 GPIO.output(BUZZER_PIN, GPIO.LOW)
 GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 GPIO.output(RED_LED_PIN, GPIO.LOW)
+GPIO.output(LIGHT1_PIN, GPIO.LOW)  # Initialize LIGHT1 to LOW
+GPIO.output(RELAY2_PIN, GPIO.LOW)  # Initialize RELAY2 to LOW
 
 # === Servo Setup ===
 servo = GPIO.PWM(SERVO_PIN, 50)
@@ -32,6 +40,7 @@ servo.start(0)
 # === LCD Setup ===
 lcd = CharLCD(i2c_expander='PCF8574', address=0x27, port=1, cols=16, rows=2)
 lcd_queue = Queue()
+
 # === Telegram Bot Setup ===
 BOT_TOKEN = "7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -119,26 +128,21 @@ def rotate_servo():
     GPIO.output(BUZZER_PIN, GPIO.HIGH)
     time.sleep(2)
     GPIO.output(BUZZER_PIN, GPIO.LOW)
-    servo.ChangeDutyCycle(7.5)  # Rotate servo to unlock position
+
+    # Turn on LIGHT1 and RELAY2 when servo is triggered
+    GPIO.output(LIGHT1_PIN, GPIO.HIGH)  # Turn on LIGHT1
+    GPIO.output(RELAY2_PIN, GPIO.HIGH)  # Turn on RELAY2
+
+    # Rotate servo to unlock position
+    servo.ChangeDutyCycle(7.5)  # Servo to 90 degrees (unlock)
     time.sleep(1)
+
+    # Reset servo back to closed position
     servo.ChangeDutyCycle(0)  # Reset to original position
     time.sleep(2)
+
     print("[INFO] Servo returned. Door unlocked.")
-def servo_from_telegram():
-    print("[TELEGRAM] Rotating servo via Telegram...")
-    GPIO.output(BUZZER_PIN, GPIO.HIGH)
-    time.sleep(2)
-    GPIO.output(BUZZER_PIN, GPIO.LOW)
-    servo.ChangeDutyCycle(2.5)  # 0 degrees
-    time.sleep(1)
-    servo.ChangeDutyCycle(12.5)  # 180 degrees
-    time.sleep(1)
-    servo.ChangeDutyCycle(0)
-    time.sleep(5)
-    servo.ChangeDutyCycle(2.5)  # back to 0
-    time.sleep(1)
-    servo.ChangeDutyCycle(0)
-    print("[TELEGRAM] Servo returned to closed position.")
+
 # === Telegram Bot Listener ===
 def telegram_listener():
     global last_update_id
@@ -191,7 +195,7 @@ def telegram_listener():
                     reply = "ALL ARE OFF"
                 elif message == "/door_open":
                     reply = "Rotating servo from Telegram..."
-                    threading.Thread(target=servo_from_telegram).start()
+                    threading.Thread(target=rotate_servo).start()
                 else:
                     reply = "Send a valid command."
 
@@ -201,7 +205,6 @@ def telegram_listener():
             
 # === Start Telegram Listener ===
 threading.Thread(target=telegram_listener, daemon=True).start()
-    
 
 # === Main Logic ===
 def main():
