@@ -14,18 +14,28 @@ import RPi.GPIO as GPIO
 BUZZER_PIN = 17
 GREEN_LED_PIN = 26
 RED_LED_PIN = 19
+SERVO_PIN = 21
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(BUZZER_PIN, GPIO.OUT)
 GPIO.setup(GREEN_LED_PIN, GPIO.OUT)
 GPIO.setup(RED_LED_PIN, GPIO.OUT)
+GPIO.setup(SERVO_PIN, GPIO.OUT)
 GPIO.output(BUZZER_PIN, GPIO.LOW)
 GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 GPIO.output(RED_LED_PIN, GPIO.LOW)
 
+# === Servo Setup ===
+servo = GPIO.PWM(SERVO_PIN, 50)
+servo.start(0)
+
 # === LCD Setup ===
 lcd = CharLCD(i2c_expander='PCF8574', address=0x27, port=1, cols=16, rows=2)
 lcd_queue = Queue()
+# === Telegram Bot Setup ===
+BOT_TOKEN = "7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI"
+BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+last_update_id = 0
 
 def lcd_worker():
     while True:
@@ -103,6 +113,96 @@ def restart_program():
     time.sleep(2)
     os.execv(sys.executable, ['python3'] + sys.argv)
 
+# === Servo control function ===
+def rotate_servo():
+    print("[INFO] Rotating servo & activating relays...")
+    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+    time.sleep(2)
+    GPIO.output(BUZZER_PIN, GPIO.LOW)
+    servo.ChangeDutyCycle(7.5)  # Rotate servo to unlock position
+    time.sleep(1)
+    servo.ChangeDutyCycle(0)  # Reset to original position
+    time.sleep(2)
+    print("[INFO] Servo returned. Door unlocked.")
+def servo_from_telegram():
+    print("[TELEGRAM] Rotating servo via Telegram...")
+    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+    time.sleep(2)
+    GPIO.output(BUZZER_PIN, GPIO.LOW)
+    servo.ChangeDutyCycle(2.5)  # 0 degrees
+    time.sleep(1)
+    servo.ChangeDutyCycle(12.5)  # 180 degrees
+    time.sleep(1)
+    servo.ChangeDutyCycle(0)
+    time.sleep(5)
+    servo.ChangeDutyCycle(2.5)  # back to 0
+    time.sleep(1)
+    servo.ChangeDutyCycle(0)
+    print("[TELEGRAM] Servo returned to closed position.")
+# === Telegram Bot Listener ===
+def telegram_listener():
+    global last_update_id
+    print("[INFO] Telegram listener started...")
+    while True:
+        try:
+            url = f"{BASE_URL}/getUpdates?offset={last_update_id + 1}&timeout=10"
+            response = requests.get(url).json()
+            for update in response.get("result", []):
+                last_update_id = update["update_id"]
+                message = update.get("message", {}).get("text", "").lower()
+                chat_id = update["message"]["chat"]["id"]
+                print(f"[TELEGRAM] {message}")
+
+                if message == "/light1_on":
+                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
+                    reply = "LIGHT1 IS ON"
+                elif message == "/light1_off":
+                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
+                    reply = "LIGHT1 IS OFF"
+                elif message == "/light2_on":
+                    GPIO.output(RELAY2_PIN, GPIO.HIGH)
+                    reply = "LIGHT2 IS ON"
+                elif message == "/light2_off":
+                    GPIO.output(RELAY2_PIN, GPIO.LOW)
+                    reply = "LIGHT2 IS OFF"
+                elif message == "/fan1_on":
+                    GPIO.output(RELAY3_PIN, GPIO.HIGH)
+                    reply = "FAN1 IS ON"
+                elif message == "/fan1_off":
+                    GPIO.output(RELAY3_PIN, GPIO.LOW)
+                    reply = "FAN1 IS OFF"
+                elif message == "/fan2_on":
+                    GPIO.output(RELAY4_PIN, GPIO.HIGH)
+                    reply = "FAN2 IS ON"
+                elif message == "/fan2_off":
+                    GPIO.output(RELAY4_PIN, GPIO.LOW)
+                    reply = "FAN2 IS OFF"
+                elif message == "/all_on":
+                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
+                    GPIO.output(RELAY2_PIN, GPIO.HIGH)
+                    GPIO.output(RELAY3_PIN, GPIO.HIGH)
+                    GPIO.output(RELAY4_PIN, GPIO.HIGH)
+                    reply = "ALL ARE ON"
+                elif message == "/all_off":
+                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
+                    GPIO.output(RELAY2_PIN, GPIO.LOW)
+                    GPIO.output(RELAY3_PIN, GPIO.LOW)
+                    GPIO.output(RELAY4_PIN, GPIO.LOW)
+                    reply = "ALL ARE OFF"
+                elif message == "/door_open":
+                    reply = "Rotating servo from Telegram..."
+                    threading.Thread(target=servo_from_telegram).start()
+                else:
+                    reply = "Send a valid command."
+
+                requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": reply})
+        except Exception as e:
+            print(f"[ERROR] Telegram: {e}")
+            
+# === Start Telegram Listener ===
+threading.Thread(target=telegram_listener, daemon=True).start()
+    
+
 # === Main Logic ===
 def main():
     cap = cv2.VideoCapture(0)
@@ -134,9 +234,7 @@ def main():
 
             lcd_queue.put(("Show your face", "", 0))
             print(f"[INFO] RFID matched with {matched_user}, waiting for face...")
-            
-            flag=False
-            c=0
+
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -180,8 +278,9 @@ def main():
                     with open(attendance_log_file, mode='a', newline='') as file:
                         writer = csv.writer(file)
                         writer.writerow([matched_user, scanned_uid, date, time_str])
-                        
+
                     GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+                    rotate_servo()  # Rotate servo to unlock door
                     time.sleep(2)
                     cap.release()
                     cv2.destroyAllWindows()
@@ -190,14 +289,12 @@ def main():
                 else:
                     lcd_queue.put(("Face Not Match", "", 1))
                     print("[WARNING] Face not matched")
-                    c=c+1
-                    if c>10:
-                        GPIO.output(BUZZER_PIN, GPIO.HIGH)
-                        GPIO.output(RED_LED_PIN, GPIO.HIGH)
-                        time.sleep(3)
-                        cap.release()
-                        cv2.destroyAllWindows()
-                        restart_program()
+                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                    GPIO.output(RED_LED_PIN, GPIO.HIGH)
+                    time.sleep(3)
+                    cap.release()
+                    cv2.destroyAllWindows()
+                    restart_program()
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
