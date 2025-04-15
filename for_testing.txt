@@ -4,9 +4,10 @@ import tflite_runtime.interpreter as tflite
 import os, json, time, csv, sys
 from datetime import datetime
 from mfrc522 import SimpleMFRC522
-import RPi.GPIO as GPIO
+from RPLCD.i2c import CharLCD
 from threading import Thread
-import requests
+from queue import Queue
+import RPi.GPIO as GPIO
 
 # === GPIO Setup ===
 BUZZER_PIN = 17
@@ -35,11 +36,6 @@ GPIO.output(RELAY2_PIN, GPIO.LOW)  # Initialize RELAY2 to LOW
 servo = GPIO.PWM(SERVO_PIN, 50)
 servo.start(0)
 
-# === Telegram Bot Setup ===
-BOT_TOKEN = "7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI"
-BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-last_update_id = 0
-
 # === RFID Reader ===
 reader = SimpleMFRC522()
 
@@ -54,10 +50,18 @@ face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_fronta
 
 # === Preprocessing ===
 def preprocess_face(face_img):
+    # Resize the face image to the required size (160x160 for FaceNet)
     face = cv2.resize(face_img, (160, 160))
+    
+    # Normalize the pixel values (mean, std)
     face = face.astype('float32')
     mean, std = face.mean(), face.std()
     face = (face - mean) / std
+    
+    # Scale the values to the range [0, 255] and convert to UINT8
+    face = np.clip(face * 128 + 128, 0, 255).astype(np.uint8)
+    
+    # Add batch dimension (since the model expects a batch of images)
     return np.expand_dims(face, axis=0)
 
 def get_embedding(face_img):
@@ -121,69 +125,6 @@ def rotate_servo():
 
     print("[INFO] Servo returned. Door unlocked.")
 
-# === Telegram Bot Listener ===
-def telegram_listener():
-    global last_update_id
-    print("[INFO] Telegram listener started...")
-    while True:
-        try:
-            url = f"{BASE_URL}/getUpdates?offset={last_update_id + 1}&timeout=10"
-            response = requests.get(url).json()
-            for update in response.get("result", []):
-                last_update_id = update["update_id"]
-                message = update.get("message", {}).get("text", "").lower()
-                chat_id = update["message"]["chat"]["id"]
-                print(f"[TELEGRAM] {message}")
-
-                if message == "/light1_on":
-                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
-                    reply = "LIGHT1 IS ON"
-                elif message == "/light1_off":
-                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
-                    reply = "LIGHT1 IS OFF"
-                elif message == "/light2_on":
-                    GPIO.output(RELAY2_PIN, GPIO.HIGH)
-                    reply = "LIGHT2 IS ON"
-                elif message == "/light2_off":
-                    GPIO.output(RELAY2_PIN, GPIO.LOW)
-                    reply = "LIGHT2 IS OFF"
-                elif message == "/fan1_on":
-                    GPIO.output(RELAY3_PIN, GPIO.HIGH)
-                    reply = "FAN1 IS ON"
-                elif message == "/fan1_off":
-                    GPIO.output(RELAY3_PIN, GPIO.LOW)
-                    reply = "FAN1 IS OFF"
-                elif message == "/fan2_on":
-                    GPIO.output(RELAY4_PIN, GPIO.HIGH)
-                    reply = "FAN2 IS ON"
-                elif message == "/fan2_off":
-                    GPIO.output(RELAY4_PIN, GPIO.LOW)
-                    reply = "FAN2 IS OFF"
-                elif message == "/all_on":
-                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
-                    GPIO.output(RELAY2_PIN, GPIO.HIGH)
-                    GPIO.output(RELAY3_PIN, GPIO.HIGH)
-                    GPIO.output(RELAY4_PIN, GPIO.HIGH)
-                    reply = "ALL ARE ON"
-                elif message == "/all_off":
-                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
-                    GPIO.output(RELAY2_PIN, GPIO.LOW)
-                    GPIO.output(RELAY3_PIN, GPIO.LOW)
-                    GPIO.output(RELAY4_PIN, GPIO.LOW)
-                    reply = "ALL ARE OFF"
-                elif message == "/door_open":
-                    reply = "Rotating servo from Telegram..."
-                    threading.Thread(target=rotate_servo).start()
-                else:
-                    reply = "Send a valid command."
-
-                requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": reply})
-        except Exception as e:
-            print(f"[ERROR] Telegram: {e}")
-            
-# === Start Telegram Listener ===
-threading.Thread(target=telegram_listener, daemon=True).start()
-
 # === Main Logic ===
 def main():
     cap = cv2.VideoCapture(0)
@@ -208,7 +149,7 @@ def main():
                     break
 
             if not matched_user:
-                print("[INFO] Unknown RFID")
+                print("[ERROR] Unknown RFID")
                 continue
 
             print(f"[INFO] RFID matched with {matched_user}, waiting for face...")
@@ -226,7 +167,7 @@ def main():
                 faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
 
                 if len(faces) == 0:
-                    print("[INFO] No face detected")
+                    print("[WARNING] No face detected")
                     cv2.imshow("Camera Feed", frame)
                     continue
 
@@ -238,7 +179,7 @@ def main():
                 known_embedding = known_faces.get(matched_user)
 
                 if known_embedding is None:
-                    print("[INFO] Face Not Found")
+                    print("[ERROR] Face Not Found")
                     break
 
                 similarity = cosine_similarity(embedding, known_embedding)
