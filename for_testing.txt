@@ -4,29 +4,41 @@ import tflite_runtime.interpreter as tflite
 import os, json, time, csv, sys
 from datetime import datetime
 from mfrc522 import SimpleMFRC522
-from smbus2 import SMBus
-from RPLCD.i2c import CharLCD
+import RPi.GPIO as GPIO
 from threading import Thread
-from queue import Queue
+import requests
 
-# === LCD Setup ===
-lcd = CharLCD(i2c_expander='PCF8574', address=0x27, port=1, cols=16, rows=2)
-lcd_queue = Queue()
+# === GPIO Setup ===
+BUZZER_PIN = 17
+GREEN_LED_PIN = 26
+RED_LED_PIN = 19
+SERVO_PIN = 21
+LIGHT1_PIN = 22  # Example GPIO pin for LIGHT1
+RELAY2_PIN = 23  # Example GPIO pin for RELAY2
 
-def lcd_worker():
-    while True:
-        message1, message2, delay = lcd_queue.get()
-        lcd.clear()
-        lcd.write_string(message1)
-        if message2:
-            lcd.cursor_pos = (1, 0)
-            lcd.write_string(message2)
-        if delay > 0:
-            time.sleep(delay)
-        lcd_queue.task_done()
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(BUZZER_PIN, GPIO.OUT)
+GPIO.setup(GREEN_LED_PIN, GPIO.OUT)
+GPIO.setup(RED_LED_PIN, GPIO.OUT)
+GPIO.setup(SERVO_PIN, GPIO.OUT)
+GPIO.setup(LIGHT1_PIN, GPIO.OUT)  # Setup LIGHT1_PIN
+GPIO.setup(RELAY2_PIN, GPIO.OUT)  # Setup RELAY2_PIN
 
-lcd_thread = Thread(target=lcd_worker, daemon=True)
-lcd_thread.start()
+GPIO.output(BUZZER_PIN, GPIO.LOW)
+GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+GPIO.output(RED_LED_PIN, GPIO.LOW)
+GPIO.output(LIGHT1_PIN, GPIO.LOW)  # Initialize LIGHT1 to LOW
+GPIO.output(RELAY2_PIN, GPIO.LOW)  # Initialize RELAY2 to LOW
+
+# === Servo Setup ===
+servo = GPIO.PWM(SERVO_PIN, 50)
+servo.start(0)
+
+# === Telegram Bot Setup ===
+BOT_TOKEN = "7038070025:AAHOoUWmqVPvFmmITJKpbWVGcdwzLDmcVJI"
+BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+last_update_id = 0
 
 # === RFID Reader ===
 reader = SimpleMFRC522()
@@ -85,23 +97,105 @@ if not os.path.exists(attendance_log_file):
 # === Restart program ===
 def restart_program():
     print("[INFO] Restarting program...")
-    lcd_queue.put(("Restarting...", "", 2))
     time.sleep(2)
     os.execv(sys.executable, ['python3'] + sys.argv)
+
+# === Servo control function ===
+def rotate_servo():
+    print("[INFO] Rotating servo & activating relays...")
+    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+    time.sleep(2)
+    GPIO.output(BUZZER_PIN, GPIO.LOW)
+
+    # Turn on LIGHT1 and RELAY2 when servo is triggered
+    GPIO.output(LIGHT1_PIN, GPIO.HIGH)  # Turn on LIGHT1
+    GPIO.output(RELAY2_PIN, GPIO.HIGH)  # Turn on RELAY2
+
+    # Rotate servo to unlock position
+    servo.ChangeDutyCycle(7.5)  # Servo to 90 degrees (unlock)
+    time.sleep(1)
+
+    # Reset servo back to closed position
+    servo.ChangeDutyCycle(0)  # Reset to original position
+    time.sleep(2)
+
+    print("[INFO] Servo returned. Door unlocked.")
+
+# === Telegram Bot Listener ===
+def telegram_listener():
+    global last_update_id
+    print("[INFO] Telegram listener started...")
+    while True:
+        try:
+            url = f"{BASE_URL}/getUpdates?offset={last_update_id + 1}&timeout=10"
+            response = requests.get(url).json()
+            for update in response.get("result", []):
+                last_update_id = update["update_id"]
+                message = update.get("message", {}).get("text", "").lower()
+                chat_id = update["message"]["chat"]["id"]
+                print(f"[TELEGRAM] {message}")
+
+                if message == "/light1_on":
+                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
+                    reply = "LIGHT1 IS ON"
+                elif message == "/light1_off":
+                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
+                    reply = "LIGHT1 IS OFF"
+                elif message == "/light2_on":
+                    GPIO.output(RELAY2_PIN, GPIO.HIGH)
+                    reply = "LIGHT2 IS ON"
+                elif message == "/light2_off":
+                    GPIO.output(RELAY2_PIN, GPIO.LOW)
+                    reply = "LIGHT2 IS OFF"
+                elif message == "/fan1_on":
+                    GPIO.output(RELAY3_PIN, GPIO.HIGH)
+                    reply = "FAN1 IS ON"
+                elif message == "/fan1_off":
+                    GPIO.output(RELAY3_PIN, GPIO.LOW)
+                    reply = "FAN1 IS OFF"
+                elif message == "/fan2_on":
+                    GPIO.output(RELAY4_PIN, GPIO.HIGH)
+                    reply = "FAN2 IS ON"
+                elif message == "/fan2_off":
+                    GPIO.output(RELAY4_PIN, GPIO.LOW)
+                    reply = "FAN2 IS OFF"
+                elif message == "/all_on":
+                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
+                    GPIO.output(RELAY2_PIN, GPIO.HIGH)
+                    GPIO.output(RELAY3_PIN, GPIO.HIGH)
+                    GPIO.output(RELAY4_PIN, GPIO.HIGH)
+                    reply = "ALL ARE ON"
+                elif message == "/all_off":
+                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
+                    GPIO.output(RELAY2_PIN, GPIO.LOW)
+                    GPIO.output(RELAY3_PIN, GPIO.LOW)
+                    GPIO.output(RELAY4_PIN, GPIO.LOW)
+                    reply = "ALL ARE OFF"
+                elif message == "/door_open":
+                    reply = "Rotating servo from Telegram..."
+                    threading.Thread(target=rotate_servo).start()
+                else:
+                    reply = "Send a valid command."
+
+                requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": reply})
+        except Exception as e:
+            print(f"[ERROR] Telegram: {e}")
+            
+# === Start Telegram Listener ===
+threading.Thread(target=telegram_listener, daemon=True).start()
 
 # === Main Logic ===
 def main():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("[ERROR] Camera not accessible!")
-        lcd_queue.put(("Camera Error", "", 2))
         restart_program()
 
     print("[INFO] Ready for attendance")
 
     try:
         while True:
-            lcd_queue.put(("Scan RFID Card...", "", 0))
+            GPIO.output(GREEN_LED_PIN, GPIO.LOW)
             print("Waiting for RFID...")
             id, text = reader.read()
             scanned_uid = str(id).strip()
@@ -114,10 +208,9 @@ def main():
                     break
 
             if not matched_user:
-                lcd_queue.put(("Unknown RFID", "", 2))
+                print("[INFO] Unknown RFID")
                 continue
 
-            lcd_queue.put(("Show your face", "", 0))
             print(f"[INFO] RFID matched with {matched_user}, waiting for face...")
 
             while True:
@@ -127,13 +220,14 @@ def main():
                     cap.release()
                     cv2.destroyAllWindows()
                     restart_program()
+                cv2.imshow("Camera Feed", frame)
 
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
 
                 if len(faces) == 0:
-                    lcd_queue.put(("No face found", "", 1))
-                    print("[WARNING] No face detected")
+                    print("[INFO] No face detected")
+                    cv2.imshow("Camera Feed", frame)
                     continue
 
                 # Use first detected face
@@ -144,14 +238,13 @@ def main():
                 known_embedding = known_faces.get(matched_user)
 
                 if known_embedding is None:
-                    lcd_queue.put(("Face Not Found", "", 2))
+                    print("[INFO] Face Not Found")
                     break
 
                 similarity = cosine_similarity(embedding, known_embedding)
                 print(f"[DEBUG] Similarity: {similarity:.4f}")
 
-                if similarity > 0.85:
-                    lcd_queue.put((matched_user, "Attendance Marked", 2))
+                if similarity > 0.8:
                     print(f"[SUCCESS] {matched_user} - Match: {similarity:.2f}")
 
                     current_time = datetime.now()
@@ -162,13 +255,21 @@ def main():
                         writer = csv.writer(file)
                         writer.writerow([matched_user, scanned_uid, date, time_str])
 
+                    GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+                    time.sleep(2)
+                    rotate_servo()  # Rotate servo to unlock door
                     cap.release()
                     cv2.destroyAllWindows()
                     return  # Restart loop for next person
 
                 else:
-                    lcd_queue.put(("Face Not Match", "", 1))
                     print("[WARNING] Face not matched")
+                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                    GPIO.output(RED_LED_PIN, GPIO.HIGH)
+                    time.sleep(3)
+                    cap.release()
+                    cv2.destroyAllWindows()
+                    restart_program()
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
@@ -178,8 +279,7 @@ def main():
     finally:
         if cap.isOpened():
             cap.release()
-        cv2.destroyAllWindows()
-        lcd.clear()
+            cv2.destroyAllWindows()
 
 # === Run Main Loop with Restart Capability ===
 while True:
