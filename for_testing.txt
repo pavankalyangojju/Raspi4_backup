@@ -51,16 +51,25 @@ interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
+# Check input type
+input_type = input_details[0]['dtype']
+print(f"Model input type: {input_type}")  # Should show uint8
+
 # === Face Detection ===
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
 # === Preprocessing ===
 def preprocess_face(face_img):
     face = cv2.resize(face_img, (160, 160))
-    face = face.astype('float32')
-    mean, std = face.mean(), face.std()
-    face = (face - mean) / std
-    return np.expand_dims(face, axis=0)
+    if input_type == np.uint8:
+        # No conversion needed for uint8 models
+        return np.expand_dims(face, axis=0)
+    else:
+        # For float32 models (though your error suggests it's uint8)
+        face = face.astype('float32')
+        mean, std = face.mean(), face.std()
+        face = (face - mean) / std
+        return np.expand_dims(face, axis=0)
 
 def get_embedding(face_img):
     preprocessed = preprocess_face(face_img)
@@ -79,6 +88,9 @@ def load_known_faces():
         path = f"dataset/{name}/face.jpg"
         if os.path.exists(path):
             img = cv2.imread(path)
+            if img is None:
+                print(f"[WARNING] Could not read image at {path}")
+                continue
             embedding = get_embedding(img)
             known_embeddings[name] = embedding
     return known_embeddings
@@ -86,8 +98,12 @@ def load_known_faces():
 known_faces = load_known_faces()
 
 # === Load RFID mapping ===
-with open("rfid_map.json", "r") as f:
-    rfid_map = json.load(f)
+try:
+    with open("rfid_map.json", "r") as f:
+        rfid_map = json.load(f)
+except FileNotFoundError:
+    print("[ERROR] rfid_map.json not found!")
+    rfid_map = {}
 
 # === CSV Setup ===
 attendance_log_file = "/home/pi/Desktop/shyam/attendance_log.csv"
@@ -99,7 +115,7 @@ if not os.path.exists(attendance_log_file):
 # === Restart program ===
 def restart_program():
     print("[INFO] Restarting program...")
-    time.sleep(2)
+    time.sleep(1)
     os.execv(sys.executable, ['python3'] + sys.argv)
 
 # === Servo control function ===
