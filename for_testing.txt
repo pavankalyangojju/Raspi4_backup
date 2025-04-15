@@ -4,7 +4,6 @@ import tflite_runtime.interpreter as tflite
 import os, json, time, csv, sys
 from datetime import datetime
 from mfrc522 import SimpleMFRC522
-from threading import Thread
 import RPi.GPIO as GPIO
 
 BUZZER_PIN = 17
