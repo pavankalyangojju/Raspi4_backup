@@ -4,9 +4,6 @@ import tflite_runtime.interpreter as tflite
 import os, json, time, csv, sys
 from datetime import datetime
 from mfrc522 import SimpleMFRC522
-from RPLCD.i2c import CharLCD
-from threading import Thread
-from queue import Queue
 import RPi.GPIO as GPIO
 
 # === GPIO Setup ===
@@ -52,23 +49,39 @@ face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_fronta
 def preprocess_face(face_img):
     # Resize the face image to the required size (160x160 for FaceNet)
     face = cv2.resize(face_img, (160, 160))
-    
+
     # Normalize the pixel values (mean, std)
     face = face.astype('float32')
     mean, std = face.mean(), face.std()
     face = (face - mean) / std
-    
+
     # Scale the values to the range [0, 255] and convert to UINT8
     face = np.clip(face * 128 + 128, 0, 255).astype(np.uint8)
-    
+
     # Add batch dimension (since the model expects a batch of images)
-    return np.expand_dims(face, axis=0)
+    face = np.expand_dims(face, axis=0)  # Shape becomes (1, 160, 160, 3)
+    
+    return face
 
 def get_embedding(face_img):
     preprocessed = preprocess_face(face_img)
-    interpreter.set_tensor(input_details[0]['index'], preprocessed)
+    
+    # Ensure the input tensor has the correct data type (UINT8)
+    print(f"[DEBUG] Preprocessed face shape: {preprocessed.shape}, dtype: {preprocessed.dtype}")
+
+    # Check if the input tensor requires UINT8 data type
+    if input_details[0]['dtype'] == np.uint8:
+        interpreter.set_tensor(input_details[0]['index'], preprocessed)
+    else:
+        print("[ERROR] Model input type mismatch.")
+        return None
+    
+    # Invoke the interpreter to get the output
     interpreter.invoke()
+
+    # Get the resulting embedding from the output tensor
     embedding = interpreter.get_tensor(output_details[0]['index'])
+
     return embedding[0]
 
 def cosine_similarity(a, b):
@@ -149,7 +162,7 @@ def main():
                     break
 
             if not matched_user:
-                print("[ERROR] Unknown RFID")
+                print("[INFO] Unknown RFID")
                 continue
 
             print(f"[INFO] RFID matched with {matched_user}, waiting for face...")
@@ -179,7 +192,7 @@ def main():
                 known_embedding = known_faces.get(matched_user)
 
                 if known_embedding is None:
-                    print("[ERROR] Face Not Found")
+                    print("[INFO] Face Not Found")
                     break
 
                 similarity = cosine_similarity(embedding, known_embedding)
