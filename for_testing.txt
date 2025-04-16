@@ -52,6 +52,9 @@ input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 input_type = input_details[0]['dtype']
 
+# === Face Detection ===
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
 # === Preprocessing ===
 def preprocess_face(face_img):
     face = cv2.resize(face_img, (160, 160))
@@ -64,8 +67,7 @@ def preprocess_face(face_img):
         return np.expand_dims(face, axis=0)
 
 def get_embedding(face_img):
-    face_rgb = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
-    preprocessed = preprocess_face(face_rgb)
+    preprocessed = preprocess_face(face_img)
     interpreter.set_tensor(input_details[0]['index'], preprocessed)
     interpreter.invoke()
     embedding = interpreter.get_tensor(output_details[0]['index'])
@@ -98,29 +100,24 @@ except FileNotFoundError:
     print("[ERROR] rfid_map.json not found!")
     rfid_map = {}
 
-# === CSV Setup ===
 attendance_log_file = "/home/pi/Desktop/AIDS/attendance_log.csv"
 if not os.path.exists(attendance_log_file):
     with open(attendance_log_file, mode='w', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(["Name", "RFID", "Date", "Time"])
 
-# === Restart program ===
 def restart_program():
     print("[INFO] Restarting program...")
     time.sleep(1)
     os.execv(sys.executable, ['python3'] + sys.argv)
 
-# === Servo control function ===
 def rotate_servo():
     print("[INFO] Rotating servo & activating relays...")
     GPIO.output(BUZZER_PIN, GPIO.HIGH)
     time.sleep(2)
     GPIO.output(BUZZER_PIN, GPIO.LOW)
-
     GPIO.output(LIGHT1_PIN, GPIO.HIGH)
     GPIO.output(LIGHT2_PIN, GPIO.HIGH)
-
     servo.ChangeDutyCycle(7.5)
     time.sleep(1)
     servo.ChangeDutyCycle(0)
@@ -145,48 +142,34 @@ def telegram_listener():
                 chat_id = update["message"]["chat"]["id"]
                 print(f"[TELEGRAM] {message}")
 
-                if message == "/light1_on":
-                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
-                    reply = "LIGHT1 IS ON"
-                elif message == "/light1_off":
-                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
-                    reply = "LIGHT1 IS OFF"
-                elif message == "/light2_on":
-                    GPIO.output(LIGHT2_PIN, GPIO.HIGH)
-                    reply = "LIGHT2 IS ON"
-                elif message == "/light2_off":
-                    GPIO.output(LIGHT2_PIN, GPIO.LOW)
-                    reply = "LIGHT2 IS OFF"
-                elif message == "/fan1_on":
-                    GPIO.output(FAN1_PIN, GPIO.HIGH)
-                    reply = "FAN1 IS ON"
-                elif message == "/fan1_off":
-                    GPIO.output(FAN1_PIN, GPIO.LOW)
-                    reply = "FAN1 IS OFF"
-                elif message == "/fan2_on":
-                    GPIO.output(FAN2_PIN, GPIO.HIGH)
-                    reply = "FAN2 IS ON"
-                elif message == "/fan2_off":
-                    GPIO.output(FAN2_PIN, GPIO.LOW)
-                    reply = "FAN2 IS OFF"
-                elif message == "/all_on":
-                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
-                    GPIO.output(LIGHT2_PIN, GPIO.HIGH)
-                    GPIO.output(FAN1_PIN, GPIO.HIGH)
-                    GPIO.output(FAN2_PIN, GPIO.HIGH)
-                    reply = "ALL ARE ON"
-                elif message == "/all_off":
-                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
-                    GPIO.output(LIGHT2_PIN, GPIO.LOW)
-                    GPIO.output(FAN1_PIN, GPIO.LOW)
-                    GPIO.output(FAN2_PIN, GPIO.LOW)
-                    reply = "ALL ARE OFF"
-                elif message == "/door_open":
+                reply = ""
+                if message == "/door_open":
                     reply = "Rotating servo from Telegram..."
                     threading.Thread(target=rotate_servo).start()
-                else:
-                    reply = "Send a valid command."
-
+                elif message.startswith("/"):
+                    pins = {
+                        "/light1_on": (LIGHT1_PIN, GPIO.HIGH),
+                        "/light1_off": (LIGHT1_PIN, GPIO.LOW),
+                        "/light2_on": (LIGHT2_PIN, GPIO.HIGH),
+                        "/light2_off": (LIGHT2_PIN, GPIO.LOW),
+                        "/fan1_on": (FAN1_PIN, GPIO.HIGH),
+                        "/fan1_off": (FAN1_PIN, GPIO.LOW),
+                        "/fan2_on": (FAN2_PIN, GPIO.HIGH),
+                        "/fan2_off": (FAN2_PIN, GPIO.LOW),
+                    }
+                    if message in pins:
+                        GPIO.output(*pins[message])
+                        reply = message.upper().replace("_", " ") + " EXECUTED"
+                    elif message == "/all_on":
+                        for pin in [LIGHT1_PIN, LIGHT2_PIN, FAN1_PIN, FAN2_PIN]:
+                            GPIO.output(pin, GPIO.HIGH)
+                        reply = "ALL DEVICES ON"
+                    elif message == "/all_off":
+                        for pin in [LIGHT1_PIN, LIGHT2_PIN, FAN1_PIN, FAN2_PIN]:
+                            GPIO.output(pin, GPIO.LOW)
+                        reply = "ALL DEVICES OFF"
+                    else:
+                        reply = "Send a valid command."
                 requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": reply})
         except Exception as e:
             print(f"[ERROR] Telegram: {e}")
@@ -223,41 +206,50 @@ def main():
                 continue
 
             print(f"[INFO] RFID matched with {matched_user}, waiting for face...")
-            c = 0
+            attempts = 0
+
             while True:
                 ret, frame = cap.read()
                 if not ret:
                     print("[ERROR] Failed to capture frame.")
-                    cap.release()
-                    cv2.destroyAllWindows()
                     restart_program()
 
-                h, w, _ = frame.shape
-                size = min(h, w)
-                top = (h - size) // 2
-                left = (w - size) // 2
-                face_img = frame[top:top+size, left:left+size]
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
 
+                if len(faces) == 0:
+                    print("[WARNING] No face detected")
+                    continue
+
+                x, y, w, h = faces[0]
+                margin = 10
+                x1, y1 = max(0, x - margin), max(0, y - margin)
+                x2, y2 = x + w + margin, y + h + margin
+                face_img = frame[y1:y2, x1:x2]
+
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
                 cv2.imshow("Detected Face", face_img)
+                cv2.imshow("Camera", frame)
 
                 embedding = get_embedding(face_img)
                 known_embedding = known_faces.get(matched_user)
 
                 if known_embedding is None:
                     print("[ERROR] Face not found in dataset")
-                    break
+                    continue
 
                 similarity = cosine_similarity(embedding, known_embedding)
                 print(f"[DEBUG] Similarity: {similarity:.4f}")
 
-                if similarity > 0.8:
+                for name, emb in known_faces.items():
+                    sim = cosine_similarity(embedding, emb)
+                    print(f"[DEBUG] Similarity with {name}: {sim:.4f}")
+
+                if similarity > 0.7:
                     print(f"[SUCCESS] {matched_user} - Match: {similarity:.2f}")
-                    current_time = datetime.now()
-                    date = current_time.strftime("%Y-%m-%d")
-                    time_str = current_time.strftime("%H:%M:%S")
-                    with open(attendance_log_file, mode='a', newline='') as file:
-                        writer = csv.writer(file)
-                        writer.writerow([matched_user, scanned_uid, date, time_str])
+                    now = datetime.now()
+                    with open(attendance_log_file, 'a', newline='') as file:
+                        csv.writer(file).writerow([matched_user, scanned_uid, now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S")])
                     GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
                     time.sleep(2)
                     rotate_servo()
@@ -265,9 +257,9 @@ def main():
                     cv2.destroyAllWindows()
                     return
                 else:
-                    c += 1
-                    if c > 15:
-                        print("[WARNING] Face not matched")
+                    attempts += 1
+                    if attempts > 15:
+                        print("[WARNING] Face not matched after 15 attempts")
                         GPIO.output(BUZZER_PIN, GPIO.HIGH)
                         GPIO.output(RED_LED_PIN, GPIO.HIGH)
                         time.sleep(3)
@@ -277,14 +269,11 @@ def main():
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
-
     except KeyboardInterrupt:
         print("[INFO] Interrupted by user.")
     finally:
-        if cap.isOpened():
-            cap.release()
-            cv2.destroyAllWindows()
+        cap.release()
+        cv2.destroyAllWindows()
 
-# === Run Main Loop with Restart Capability ===
 while True:
     main()
