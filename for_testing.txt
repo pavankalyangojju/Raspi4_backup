@@ -38,24 +38,30 @@ GPIO.output(BUZZER_PIN, GPIO.LOW)
 GPIO.output(GREEN_LED_PIN, GPIO.LOW)
 GPIO.output(RED_LED_PIN, GPIO.LOW)
 
-# === Servo Setup ===
 servo = GPIO.PWM(SERVO_PIN, 50)
 servo.start(0)
 
-# === RFID Reader ===
 reader = SimpleMFRC522()
 
-# === Load TFLite model ===
 interpreter = tflite.Interpreter(model_path="facenet.tflite")
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 input_type = input_details[0]['dtype']
 
-# === Face Detection ===
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
-# === Preprocessing ===
+def detect_and_crop_face(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.1, 5)
+    if len(faces) == 0:
+        return None
+    x, y, w, h = faces[0]
+    margin = 20
+    x1, y1 = max(0, x - margin), max(0, y - margin)
+    x2, y2 = x + w + margin, y + h + margin
+    return img[y1:y2, x1:x2]
+
 def preprocess_face(face_img):
     face = cv2.resize(face_img, (160, 160))
     if input_type == np.uint8:
@@ -70,13 +76,12 @@ def get_embedding(face_img):
     preprocessed = preprocess_face(face_img)
     interpreter.set_tensor(input_details[0]['index'], preprocessed)
     interpreter.invoke()
-    embedding = interpreter.get_tensor(output_details[0]['index'])
-    return embedding[0]
+    embedding = interpreter.get_tensor(output_details[0]['index'])[0]
+    return embedding / np.linalg.norm(embedding)
 
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-# === Load known faces and embeddings ===
 def load_known_faces():
     known_embeddings = {}
     for name in os.listdir("dataset"):
@@ -84,35 +89,32 @@ def load_known_faces():
         if os.path.exists(path):
             img = cv2.imread(path)
             if img is None:
-                print(f"[WARNING] Could not read image at {path}")
                 continue
-            embedding = get_embedding(img)
+            face_img = detect_and_crop_face(img)
+            if face_img is None:
+                continue
+            embedding = get_embedding(face_img)
             known_embeddings[name] = embedding
     return known_embeddings
 
 known_faces = load_known_faces()
 
-# === Load RFID mapping ===
 try:
     with open("rfid_map.json", "r") as f:
         rfid_map = json.load(f)
 except FileNotFoundError:
-    print("[ERROR] rfid_map.json not found!")
     rfid_map = {}
 
 attendance_log_file = "/home/pi/Desktop/AIDS/attendance_log.csv"
 if not os.path.exists(attendance_log_file):
-    with open(attendance_log_file, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(["Name", "RFID", "Date", "Time"])
+    with open(attendance_log_file, 'w', newline='') as file:
+        csv.writer(file).writerow(["Name", "RFID", "Date", "Time"])
 
 def restart_program():
-    print("[INFO] Restarting program...")
     time.sleep(1)
     os.execv(sys.executable, ['python3'] + sys.argv)
 
 def rotate_servo():
-    print("[INFO] Rotating servo & activating relays...")
     GPIO.output(BUZZER_PIN, GPIO.HIGH)
     time.sleep(2)
     GPIO.output(BUZZER_PIN, GPIO.LOW)
@@ -122,16 +124,13 @@ def rotate_servo():
     time.sleep(1)
     servo.ChangeDutyCycle(0)
     time.sleep(2)
-    print("[INFO] Servo returned. Door unlocked.")
 
-# === Telegram Bot Setup ===
 BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 last_update_id = 0
 
 def telegram_listener():
     global last_update_id
-    print("[INFO] Telegram listener started...")
     while True:
         try:
             url = f"{BASE_URL}/getUpdates?offset={last_update_id + 1}&timeout=10"
@@ -140,8 +139,6 @@ def telegram_listener():
                 last_update_id = update["update_id"]
                 message = update.get("message", {}).get("text", "").lower()
                 chat_id = update["message"]["chat"]["id"]
-                print(f"[TELEGRAM] {message}")
-
                 reply = ""
                 if message == "/door_open":
                     reply = "Rotating servo from Telegram..."
@@ -177,23 +174,18 @@ def telegram_listener():
 
 threading.Thread(target=telegram_listener, daemon=True).start()
 
-# === Main Logic ===
 def main():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        print("[ERROR] Camera not accessible!")
         restart_program()
 
     cv2.namedWindow("Detected Face", cv2.WINDOW_NORMAL)
-    print("[INFO] Ready for attendance")
-
     try:
         while True:
             GPIO.output(GREEN_LED_PIN, GPIO.LOW)
             print("Waiting for RFID...")
             id, text = reader.read()
             scanned_uid = str(id).strip()
-            print("RFID scanned:", scanned_uid)
 
             matched_user = None
             for name, uid in rfid_map.items():
@@ -211,25 +203,14 @@ def main():
             while True:
                 ret, frame = cap.read()
                 if not ret:
-                    print("[ERROR] Failed to capture frame.")
                     restart_program()
 
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
-
-                if len(faces) == 0:
+                face_img = detect_and_crop_face(frame)
+                if face_img is None:
                     print("[WARNING] No face detected")
                     continue
 
-                x, y, w, h = faces[0]
-                margin = 10
-                x1, y1 = max(0, x - margin), max(0, y - margin)
-                x2, y2 = x + w + margin, y + h + margin
-                face_img = frame[y1:y2, x1:x2]
-
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
                 cv2.imshow("Detected Face", face_img)
-                cv2.imshow("Camera", frame)
 
                 embedding = get_embedding(face_img)
                 known_embedding = known_faces.get(matched_user)
@@ -241,11 +222,7 @@ def main():
                 similarity = cosine_similarity(embedding, known_embedding)
                 print(f"[DEBUG] Similarity: {similarity:.4f}")
 
-                for name, emb in known_faces.items():
-                    sim = cosine_similarity(embedding, emb)
-                    print(f"[DEBUG] Similarity with {name}: {sim:.4f}")
-
-                if similarity > 0.7:
+                if similarity > 0.6:
                     print(f"[SUCCESS] {matched_user} - Match: {similarity:.2f}")
                     now = datetime.now()
                     with open(attendance_log_file, 'a', newline='') as file:
