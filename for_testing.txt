@@ -10,8 +10,8 @@ import RPi.GPIO as GPIO
 
 # === GPIO Setup ===
 BUZZER_PIN = 17
-GREEN_LED_PIN = 26
-RED_LED_PIN = 19
+GREEN_LED_PIN = 2
+RED_LED_PIN = 3
 SERVO_PIN = 21
 
 LIGHT1_PIN = 26
@@ -50,10 +50,7 @@ interpreter = tflite.Interpreter(model_path="facenet.tflite")
 interpreter.allocate_tensors()
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
-
-# Check input type
 input_type = input_details[0]['dtype']
-print(f"Model input type: {input_type}")  # Should show uint8
 
 # === Face Detection ===
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
@@ -62,10 +59,8 @@ face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_fronta
 def preprocess_face(face_img):
     face = cv2.resize(face_img, (160, 160))
     if input_type == np.uint8:
-        # No conversion needed for uint8 models
         return np.expand_dims(face, axis=0)
     else:
-        # For float32 models (though your error suggests it's uint8)
         face = face.astype('float32')
         mean, std = face.mean(), face.std()
         face = (face - mean) / std
@@ -106,7 +101,7 @@ except FileNotFoundError:
     rfid_map = {}
 
 # === CSV Setup ===
-attendance_log_file = "/home/pi/Desktop/shyam/attendance_log.csv"
+attendance_log_file = "/home/pi/Desktop/AIDS/attendance_log.csv"
 if not os.path.exists(attendance_log_file):
     with open(attendance_log_file, mode='w', newline='') as file:
         writer = csv.writer(file)
@@ -135,7 +130,7 @@ def rotate_servo():
     print("[INFO] Servo returned. Door unlocked.")
 
 # === Telegram Bot Setup ===
-BOT_TOKEN = "7538789175:AAEj2AtmpVUjQOXXvEb5Lg7h0u-9ETxpZG4"
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 last_update_id = 0
 
@@ -209,6 +204,8 @@ def main():
         print("[ERROR] Camera not accessible!")
         restart_program()
 
+    cv2.namedWindow("Detected Face", cv2.WINDOW_NORMAL)
+
     print("[INFO] Ready for attendance")
 
     try:
@@ -230,7 +227,7 @@ def main():
                 continue
 
             print(f"[INFO] RFID matched with {matched_user}, waiting for face...")
-
+            c = 0
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -248,6 +245,7 @@ def main():
 
                 (x, y, w, h) = faces[0]
                 face_img = frame[y:y+h, x:x+w]
+                cv2.imshow("Detected Face", face_img)
 
                 embedding = get_embedding(face_img)
                 known_embedding = known_faces.get(matched_user)
@@ -264,7 +262,7 @@ def main():
                     current_time = datetime.now()
                     date = current_time.strftime("%Y-%m-%d")
                     time_str = current_time.strftime("%H:%M:%S")
-                    with open(attendance_log_file, mode='a', newline='') as file:
+                    with open(attendance_log_file, mode='a', newline='5') as file:
                         writer = csv.writer(file)
                         writer.writerow([matched_user, scanned_uid, date, time_str])
                     GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
@@ -273,15 +271,16 @@ def main():
                     cap.release()
                     cv2.destroyAllWindows()
                     return
-
                 else:
-                    print("[WARNING] Face not matched")
-                    GPIO.output(BUZZER_PIN, GPIO.HIGH)
-                    GPIO.output(RED_LED_PIN, GPIO.HIGH)
-                    time.sleep(3)
-                    cap.release()
-                    cv2.destroyAllWindows()
-                    restart_program()
+                    c += 1
+                    if c > 15:
+                        print("[WARNING] Face not matched")
+                        GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                        GPIO.output(RED_LED_PIN, GPIO.HIGH)
+                        time.sleep(3)
+                        cap.release()
+                        cv2.destroyAllWindows()
+                        restart_program()
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
