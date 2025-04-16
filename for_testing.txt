@@ -52,9 +52,6 @@ input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 input_type = input_details[0]['dtype']
 
-# === Face Detection ===
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-
 # === Preprocessing ===
 def preprocess_face(face_img):
     face = cv2.resize(face_img, (160, 160))
@@ -67,7 +64,8 @@ def preprocess_face(face_img):
         return np.expand_dims(face, axis=0)
 
 def get_embedding(face_img):
-    preprocessed = preprocess_face(face_img)
+    face_rgb = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
+    preprocessed = preprocess_face(face_rgb)
     interpreter.set_tensor(input_details[0]['index'], preprocessed)
     interpreter.invoke()
     embedding = interpreter.get_tensor(output_details[0]['index'])
@@ -134,7 +132,6 @@ BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 last_update_id = 0
 
-# === Telegram Bot Listener ===
 def telegram_listener():
     global last_update_id
     print("[INFO] Telegram listener started...")
@@ -205,7 +202,6 @@ def main():
         restart_program()
 
     cv2.namedWindow("Detected Face", cv2.WINDOW_NORMAL)
-
     print("[INFO] Ready for attendance")
 
     try:
@@ -236,15 +232,12 @@ def main():
                     cv2.destroyAllWindows()
                     restart_program()
 
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
+                h, w, _ = frame.shape
+                size = min(h, w)
+                top = (h - size) // 2
+                left = (w - size) // 2
+                face_img = frame[top:top+size, left:left+size]
 
-                if len(faces) == 0:
-                    print("[WARNING] No face detected")
-                    continue
-
-                (x, y, w, h) = faces[0]
-                face_img = frame[y:y+h, x:x+w]
                 cv2.imshow("Detected Face", face_img)
 
                 embedding = get_embedding(face_img)
@@ -262,7 +255,7 @@ def main():
                     current_time = datetime.now()
                     date = current_time.strftime("%Y-%m-%d")
                     time_str = current_time.strftime("%H:%M:%S")
-                    with open(attendance_log_file, mode='a', newline='5') as file:
+                    with open(attendance_log_file, mode='a', newline='') as file:
                         writer = csv.writer(file)
                         writer.writerow([matched_user, scanned_uid, date, time_str])
                     GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
