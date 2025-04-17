@@ -1,140 +1,120 @@
+import os
 import cv2
 import numpy as np
-import os
-import RPi.GPIO as GPIO
-import time
-import pandas as pd
-import threading
-import requests
-from mfrc522 import SimpleMFRC522
-import sys
+import tflite_runtime.interpreter as tflite
 
-# === Restart logic ===
-def restart_program():
-    print("[INFO] Restarting program...")
-    python = sys.executable
-    os.execl(python, python, *sys.argv)
+# -------------------- CONFIG --------------------
+DATASET_DIR = "dataset"
+TFLITE_MODEL = "facenet.tflite"
+IMG_SIZE = 160
+SIMILARITY_THRESHOLD = 0.5  # Cosine similarity (closer to 1.0 is better)
 
-# === GPIO Setup ===
-SERVO_PIN = 21
-BUZZER_PIN = 20
-LIGHT1_PIN = 26
-RELAY2_PIN = 19
-RELAY3_PIN = 13
-RELAY4_PIN = 6
-GPIO.setwarnings(False)
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(SERVO_PIN, GPIO.OUT)
-GPIO.setup(BUZZER_PIN, GPIO.OUT)
-GPIO.setup(LIGHT1_PIN, GPIO.OUT)
-GPIO.output(LIGHT1_PIN, GPIO.LOW)
-GPIO.setup(RELAY2_PIN, GPIO.OUT)
-GPIO.output(RELAY2_PIN, GPIO.LOW)
-GPIO.setup(RELAY3_PIN, GPIO.OUT)
-GPIO.output(RELAY3_PIN, GPIO.LOW)
-GPIO.setup(RELAY4_PIN, GPIO.OUT)
-GPIO.output(RELAY4_PIN, GPIO.LOW)
+# -------------------- LOAD MODEL --------------------
+print("[INFO] Loading TFLite FaceNet model...")
+interpreter = tflite.Interpreter(model_path=TFLITE_MODEL)
+interpreter.allocate_tensors()
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
 
-servo = GPIO.PWM(SERVO_PIN, 50)
-servo.start(0)
+# -------------------- LOAD HAAR CASCADE --------------------
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-# === Load Recognizer and Cascade ===
-recognizer = cv2.face.LBPHFaceRecognizer_create()
-recognizer.read('trainer/trainer.yml')
-faceCascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+# -------------------- FUNCTIONS --------------------
+def preprocess(img):
+    img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-# === Load user and label data ===
-user_df = pd.read_csv("user_data.csv")  # Ensure columns: RFID_UID, Name
-labels_df = pd.read_csv("trainer/labels.csv")  # Ensure columns: ID, Name
+    input_dtype = input_details[0]['dtype']
 
-# === RFID Setup ===
-rfid_reader = SimpleMFRC522()
+    if input_dtype == np.uint8:
+        img = img.astype(np.uint8)
+    else:  # float32
+        img = img.astype('float32') / 255.0
 
-# === Camera Setup ===
-cam = cv2.VideoCapture(0)
-cam.set(3, 640)
-cam.set(4, 480)
-minW = int(0.1 * cam.get(3))
-minH = int(0.1 * cam.get(4))
+    return np.expand_dims(img, axis=0)
 
-# === Main Loop ===
-try:
-    while True:
-        print("[INFO] Waiting for RFID scan...")
-        rfid_id, _ = rfid_reader.read()
-        rfid_id = str(rfid_id).strip()
-        print(f"[INFO] Scanned RFID: {rfid_id}")
+def get_embedding(face_img):
+    face = preprocess(face_img)
+    interpreter.set_tensor(input_details[0]['index'], face)
+    interpreter.invoke()
+    return interpreter.get_tensor(output_details[0]['index'])[0]
 
-        # Lookup name for RFID
-        user_row = user_df[user_df['RFID_UID'] == int(rfid_id)]
-        if user_row.empty:
-            print("[ERROR] This RFID is not registered.")
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+def recognize(embedding, known_embeddings):
+    best_match = None
+    highest_similarity = -1
+
+    for name, ref_emb in known_embeddings.items():
+        similarity = cosine_similarity(embedding, ref_emb)
+        if similarity > highest_similarity:
+            highest_similarity = similarity
+            best_match = name
+
+    if highest_similarity >= SIMILARITY_THRESHOLD:
+        return best_match
+    else:
+        return "Unknown"
+
+# -------------------- LOAD DATASET --------------------
+print("[INFO] Loading and processing dataset images...")
+known_faces = {}
+
+for person in os.listdir(DATASET_DIR):
+    person_dir = os.path.join(DATASET_DIR, person)
+    if not os.path.isdir(person_dir):
+        continue
+    for img_file in os.listdir(person_dir):
+        img_path = os.path.join(person_dir, img_file)
+        img = cv2.imread(img_path)
+        if img is None:
+            continue
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+
+        if len(faces) == 0:
+            print(f"[WARN] No face in {img_path}")
             continue
 
-        user_name = user_row.iloc[0]['Name']
-        print(f"[INFO] RFID belongs to: {user_name}")
+        x, y, w, h = faces[0]
+        face = img[y:y+h, x:x+w]
+        emb = get_embedding(face)
+        known_faces[person] = emb
+        print(f"[OK] Embedding generated for {person}")
+        break  # Use only one image per person
 
-        access_granted = False
+if not known_faces:
+    print("[ERROR] No embeddings found.")
+    exit()
 
-        while True:
-            ret, frame = cam.read()
-            if not ret or frame is None:
-                print("[ERROR] Failed to capture image from camera")
-                time.sleep(2)
-                restart_program()
+# -------------------- REAL-TIME RECOGNITION --------------------
+print("[INFO] Starting face recognition. Press 'q' to quit.")
+cap = cv2.VideoCapture(0)
 
-            try:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            except cv2.error as e:
-                print(f"[ERROR] OpenCV Error: {e}")
-                cam.release()
-                cv2.destroyAllWindows()
-                time.sleep(2)
-                restart_program()
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        continue
 
-            faces = faceCascade.detectMultiScale(gray, 1.1, 7, minSize=(minW, minH))
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
 
-            for (x, y, w, h) in faces:
-                id_predicted, confidence = recognizer.predict(gray[y:y + h, x:x + w])
+    for (x, y, w, h) in faces:
+        face_img = frame[y:y+h, x:x+w]
+        try:
+            emb = get_embedding(face_img)
+            name = recognize(emb, known_faces)
+        except Exception as e:
+            name = "Error"
+            print("[ERROR] Embedding failed:", e)
 
-                if confidence < 40:  # Higher confidence = lower number
-                    matched_row = labels_df[labels_df['ID'] == id_predicted]
-                    if not matched_row.empty:
-                        predicted_name = matched_row.iloc[0]['Name']
-                        print(f"[INFO] Face Recognized as: {predicted_name} (Confidence: {round(confidence)}%)")
+        cv2.rectangle(frame, (x, y), (x+w, y+h), (0,255,0), 2)
+        cv2.putText(frame, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
 
-                        # ✅ Match RFID name with Face Recognition name
-                        if predicted_name == user_name:
-                            access_granted = True
-                            label = f"✅ {predicted_name} ({round(confidence)}%)"
-                        else:
-                            label = f"❌ Mismatch! RFID: {user_name}, Face: {predicted_name}"
-                            print(f"[ALERT] Name Mismatch! Denying Access.")
+    cv2.imshow("Face Recognition", frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
-                    else:
-                        label = f"Unknown ({round(confidence)}%)"
-                else:
-                    label = f"Unknown ({round(confidence)}%)"
-
-                color = (0, 255, 0) if access_granted else (0, 0, 255)
-                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-                cv2.putText(frame, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
-
-                if access_granted:
-                    print(f"[ACCESS GRANTED] {user_name}")
-                    rotate_servo()
-                    break
-
-            cv2.imshow('Face Recognition', frame)
-            if access_granted or cv2.waitKey(10) & 0xFF == 27:
-                break
-
-except KeyboardInterrupt:
-    print("\n[INFO] Interrupted by user")
-
-finally:
-    print("[INFO] Cleaning up...")
-    cam.release()
-    cv2.destroyAllWindows()
-    servo.stop()
-    GPIO.cleanup()
+cap.release()
+cv2.destroyAllWindows()
