@@ -4,6 +4,14 @@ import cv2
 import numpy as np
 import tflite_runtime.interpreter as tflite
 import RPi.GPIO as GPIO
+import csv
+import json
+import requests
+import sys
+import time
+import threading
+from datetime import datetime
+from mfrc522 import SimpleMFRC522
 
 # -------------------- GPIO SETUP --------------------
 BUZZER_PIN = 17
@@ -313,8 +321,7 @@ def main():
             
                 cv2.imshow("Face Recognition", frame)
 
-                if name =  matched_user:
-                    print(f"[SUCCESS] {matched_user} - Match: {similarity:.2f}")
+                if name == matched_user:
                     current_time = datetime.now()
                     date = current_time.strftime("%Y-%m-%d")
                     time_str = current_time.strftime("%H:%M:%S")
@@ -344,6 +351,7 @@ def main():
         if cap.isOpened():
             cap.release()
             cv2.destroyAllWindows()
+            servo.stop()
 
 # === Run Main Loop with Restart Capability ===
 while True:
