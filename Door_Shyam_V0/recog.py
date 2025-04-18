@@ -294,14 +294,7 @@ def main():
             
                 cv2.imshow("Face Recognition", frame)
 
-                if known_embedding is None:
-                    print("[ERROR] Face not found in dataset")
-                    break
-
-                similarity = cosine_similarity(embedding, known_embedding)
-                print(f"[DEBUG] Similarity: {similarity:.4f}")
-
-                if similarity > 0.8:
+                if name =  matched_user:
                     print(f"[SUCCESS] {matched_user} - Match: {similarity:.2f}")
                     current_time = datetime.now()
                     date = current_time.strftime("%Y-%m-%d")
