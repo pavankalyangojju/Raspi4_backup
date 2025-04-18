@@ -195,7 +195,7 @@ def rotate_servo():
     print("[INFO] Servo returned. Door unlocked.")
 
 # === Telegram Bot Setup ===
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "7646771859:AAF4lyQpDgQ3hepxzFor03hvS5Vm-nzRVgE"
 BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 last_update_id = 0
 
@@ -305,9 +305,7 @@ def main():
             
                     cv2.rectangle(frame, (x, y), (x+w, y+h), (0,255,0), 2)
                     cv2.putText(frame, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
-            
                 cv2.imshow("Face Recognition", frame)
-
                 if name == matched_user:
                     current_time = datetime.now()
                     date = current_time.strftime("%Y-%m-%d")
@@ -342,5 +340,4 @@ def main():
 
 # === Run Main Loop with Restart Capability ===
 while True:
-	print("1")
 	main()
