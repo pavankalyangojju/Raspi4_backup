@@ -36,6 +36,17 @@ TFLITE_MODEL = "facenet.tflite"
 IMG_SIZE = 160
 SIMILARITY_THRESHOLD = 0.7
 
+GPIO.output(BUZZER_PIN, GPIO.LOW)
+GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+GPIO.output(RED_LED_PIN, GPIO.LOW)
+
+# === Servo Setup ===
+servo = GPIO.PWM(SERVO_PIN, 50)
+servo.start(0)
+
+# === RFID Reader ===
+reader = SimpleMFRC522()
+
 # -------------------- LOAD MODEL --------------------
 print("[INFO] Loading TFLite FaceNet model...")
 interpreter = tflite.Interpreter(model_path=TFLITE_MODEL)
@@ -119,9 +130,108 @@ for person in os.listdir(DATASET_DIR):
         print(f"[OK] Embedding generated for {person}")
         break  # Use only one image per person
 
+# === Load RFID mapping ===
+try:
+    with open("rfid_map.json", "r") as f:
+        rfid_map = json.load(f)
+except FileNotFoundError:
+    print("[ERROR] rfid_map.json not found!")
+    rfid_map = {}
+
 if not known_faces:
     print("[ERROR] No embeddings found.")
     exit()
+
+# === CSV Setup ===
+attendance_log_file = "/home/pi/Desktop/AIDS/attendance_log.csv"
+if not os.path.exists(attendance_log_file):
+    with open(attendance_log_file, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(["Name", "RFID", "Date", "Time"])
+
+# === Restart program ===
+def restart_program():
+    print("[INFO] Restarting program...")
+    time.sleep(1)
+    os.execv(sys.executable, ['python3'] + sys.argv)
+    
+# === Servo control function ===
+def rotate_servo():
+    print("[INFO] Rotating servo & activating relays...")
+    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+    time.sleep(2)
+    GPIO.output(BUZZER_PIN, GPIO.LOW)
+
+    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
+    GPIO.output(LIGHT2_PIN, GPIO.HIGH)
+
+    servo.ChangeDutyCycle(7.5)
+    time.sleep(1)
+    servo.ChangeDutyCycle(0)
+    time.sleep(2)
+    print("[INFO] Servo returned. Door unlocked.")
+
+# === Telegram Bot Setup ===
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+last_update_id = 0
+
+def telegram_listener():
+    global last_update_id
+    print("[INFO] Telegram listener started...")
+    while True:
+        try:
+            url = f"{BASE_URL}/getUpdates?offset={last_update_id + 1}&timeout=10"
+            response = requests.get(url).json()
+            for update in response.get("result", []):
+                last_update_id = update["update_id"]
+                message = update.get("message", {}).get("text", "").lower()
+                chat_id = update["message"]["chat"]["id"]
+                print(f"[TELEGRAM] {message}")
+
+                reply = "Invalid command."
+                if message == "/door_open":
+                    reply = "Opening door..."
+                    threading.Thread(target=rotate_servo).start()
+                elif message == "/light1_on":
+                    GPIO.output(LIGHT1_PIN, GPIO.HIGH)
+                    reply = "LIGHT1 ON"
+                elif message == "/light1_off":
+                    GPIO.output(LIGHT1_PIN, GPIO.LOW)
+                    reply = "LIGHT1 OFF"
+                elif message == "/light2_on":
+                    GPIO.output(LIGHT2_PIN, GPIO.HIGH)
+                    reply = "LIGHT2 ON"
+                elif message == "/light2_off":
+                    GPIO.output(LIGHT2_PIN, GPIO.LOW)
+                    reply = "LIGHT2 OFF"
+                elif message == "/fan1_on":
+                    GPIO.output(FAN1_PIN, GPIO.HIGH)
+                    reply = "FAN1 ON"
+                elif message == "/fan1_off":
+                    GPIO.output(FAN1_PIN, GPIO.LOW)
+                    reply = "FAN1 OFF"
+                elif message == "/fan2_on":
+                    GPIO.output(FAN2_PIN, GPIO.HIGH)
+                    reply = "FAN2 ON"
+                elif message == "/fan2_off":
+                    GPIO.output(FAN2_PIN, GPIO.LOW)
+                    reply = "FAN2 OFF"
+                elif message == "/all_on":
+                    for pin in [LIGHT1_PIN, LIGHT2_PIN, FAN1_PIN, FAN2_PIN]:
+                        GPIO.output(pin, GPIO.HIGH)
+                    reply = "ALL ON"
+                elif message == "/all_off":
+                    for pin in [LIGHT1_PIN, LIGHT2_PIN, FAN1_PIN, FAN2_PIN]:
+                        GPIO.output(pin, GPIO.LOW)
+                    reply = "ALL OFF"
+
+                requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": reply})
+        except Exception as e:
+            print(f"[ERROR] Telegram: {e}")
+        time.sleep(2)
+
+threading.Thread(target=telegram_listener, daemon=True).start()
 
 # -------------------- REAL-TIME RECOGNITION --------------------
 print("[INFO] Starting face recognition. Press 'q' to quit.")
