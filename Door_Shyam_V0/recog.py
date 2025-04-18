@@ -282,10 +282,19 @@ def main():
                     print("[WARNING] No face detected")
                     continue
 
-                (x, y, w, h) = faces[0]
-                face_img = frame[y:y+h, x:x+w]
-                embedding = get_embedding(face_img)
-                known_embedding = known_faces.get(matched_user)
+                for (x, y, w, h) in faces:
+                    face_img = frame[y:y+h, x:x+w]
+                    try:
+                        emb = get_embedding(face_img)
+                        name = recognize(emb, known_faces)
+                    except Exception as e:
+                        name = "Error"
+                        print("[ERROR] Embedding failed:", e)
+            
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0,255,0), 2)
+                    cv2.putText(frame, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
+            
+                cv2.imshow("Face Recognition", frame)
 
                 if known_embedding is None:
                     print("[ERROR] Face not found in dataset")
