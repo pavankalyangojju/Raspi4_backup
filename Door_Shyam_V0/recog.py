@@ -103,6 +103,7 @@ def recognize(embedding, known_embeddings):
         if similarity > highest_similarity:
             highest_similarity = similarity
             best_match = name
+    name = "Unknown"
 
     if highest_similarity >= SIMILARITY_THRESHOLD:
         return best_match
@@ -246,9 +247,6 @@ def telegram_listener():
                     for pin in [LIGHT1_PIN, LIGHT2_PIN, FAN1_PIN, FAN2_PIN]:
                         GPIO.output(pin, GPIO.LOW)
                     reply = "ALL OFF"
-                elif message == "/door_open":
-                    reply = "Rotating servo from Telegram..."
-                    threading.Thread(target=servo_from_telegram).start()
                 else:
                     reply = "Send a valid command."
                 requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": reply})
