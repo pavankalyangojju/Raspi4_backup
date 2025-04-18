@@ -100,7 +100,22 @@ def recognize(embedding, known_embeddings):
         return best_match
     else:
         return "Unknown"
-
+# === Servo control via Telegram ===
+def servo_from_telegram():
+    print("[TELEGRAM] Rotating servo via Telegram...")
+    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+    time.sleep(2)
+    GPIO.output(BUZZER_PIN, GPIO.LOW)
+    servo.ChangeDutyCycle(2.5)  # 0 degrees
+    time.sleep(1)
+    servo.ChangeDutyCycle(12.5)  # 180 degrees
+    time.sleep(1)
+    servo.ChangeDutyCycle(0)
+    time.sleep(5)
+    servo.ChangeDutyCycle(2.5)  # back to 0
+    time.sleep(1)
+    servo.ChangeDutyCycle(0)
+    print("[TELEGRAM] Servo returned to closed position.")
 # -------------------- LOAD DATASET --------------------
 print("[INFO] Loading and processing dataset images...")
 known_faces = {}
@@ -223,7 +238,11 @@ def telegram_listener():
                     for pin in [LIGHT1_PIN, LIGHT2_PIN, FAN1_PIN, FAN2_PIN]:
                         GPIO.output(pin, GPIO.LOW)
                     reply = "ALL OFF"
-
+                elif message == "/door_open":
+                    reply = "Rotating servo from Telegram..."
+                    threading.Thread(target=servo_from_telegram).start()
+                else:
+                    reply = "Send a valid command."
                 requests.post(f"{BASE_URL}/sendMessage", data={"chat_id": chat_id, "text": reply})
         except Exception as e:
             print(f"[ERROR] Telegram: {e}")
