@@ -170,7 +170,7 @@ def main():
                 similarity = cosine_similarity(embedding, known_embedding)
                 print(f"[DEBUG] Similarity: {similarity:.4f}")
 
-                if similarity > 0.9:
+                if similarity > 0.85:
                     lcd_queue.put((matched_user, "Attendance Marked", 2))
                     print(f"[SUCCESS] {matched_user} - Match: {similarity:.2f}")
 
