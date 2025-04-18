@@ -97,8 +97,6 @@ def recognize(embedding, known_embeddings):
             best_match = name
 
     if highest_similarity >= SIMILARITY_THRESHOLD:
-        global flag
-        flag = True
         return best_match
     else:
         return "Unknown"
