@@ -258,10 +258,6 @@ def telegram_listener():
 
 threading.Thread(target=telegram_listener, daemon=True).start()
 
-# -------------------- REAL-TIME RECOGNITION --------------------
-print("[INFO] Starting face recognition. Press 'q' to quit.")
-cap = cv2.VideoCapture(0)
-flag = False
 
 # === Main Logic ===
 def main():
