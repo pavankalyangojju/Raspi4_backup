@@ -238,34 +238,94 @@ print("[INFO] Starting face recognition. Press 'q' to quit.")
 cap = cv2.VideoCapture(0)
 flag = False
 
+# === Main Logic ===
+def main():
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("[ERROR] Camera not accessible!")
+        restart_program()
+
+    print("[INFO] Ready for attendance")
+
+    try:
+        while True:
+            GPIO.output(GREEN_LED_PIN, GPIO.LOW)
+            print("Waiting for RFID...")
+            id, text = reader.read()
+            scanned_uid = str(id).strip()
+            print("RFID scanned:", scanned_uid)
+
+            matched_user = None
+            for name, uid in rfid_map.items():
+                if uid == scanned_uid:
+                    matched_user = name
+                    break
+
+            if not matched_user:
+                print("[WARNING] Unknown RFID")
+                continue
+
+            print(f"[INFO] RFID matched with {matched_user}, waiting for face...")
+            c = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    print("[ERROR] Failed to capture frame.")
+                    cap.release()
+                    cv2.destroyAllWindows()
+                    restart_program()
+
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
+
+                if len(faces) == 0:
+                    print("[WARNING] No face detected")
+                    continue
+
+                (x, y, w, h) = faces[0]
+                face_img = frame[y:y+h, x:x+w]
+                embedding = get_embedding(face_img)
+                known_embedding = known_faces.get(matched_user)
+
+                if known_embedding is None:
+                    print("[ERROR] Face not found in dataset")
+                    break
+
+                similarity = cosine_similarity(embedding, known_embedding)
+                print(f"[DEBUG] Similarity: {similarity:.4f}")
+
+                if similarity > 0.8:
+                    print(f"[SUCCESS] {matched_user} - Match: {similarity:.2f}")
+                    current_time = datetime.now()
+                    date = current_time.strftime("%Y-%m-%d")
+                    time_str = current_time.strftime("%H:%M:%S")
+                    with open(attendance_log_file, mode='a', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow([matched_user, scanned_uid, date, time_str])
+                    GPIO.output(GREEN_LED_PIN, GPIO.HIGH)
+                    time.sleep(2)
+                    rotate_servo()
+                    cap.release()
+                    cv2.destroyAllWindows()
+                    return
+                else:
+                    c += 1
+                    if c > 15:
+                        print("[WARNING] Face not matched")
+                        GPIO.output(BUZZER_PIN, GPIO.HIGH)
+                        GPIO.output(RED_LED_PIN, GPIO.HIGH)
+                        time.sleep(3)
+                        cap.release()
+                        cv2.destroyAllWindows()
+                        restart_program()
+
+    except KeyboardInterrupt:
+        print("[INFO] Interrupted by user.")
+    finally:
+        if cap.isOpened():
+            cap.release()
+            cv2.destroyAllWindows()
+
+# === Run Main Loop with Restart Capability ===
 while True:
-    ret, frame = cap.read()
-    if not ret:
-        continue
-
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-
-    for (x, y, w, h) in faces:
-        face_img = frame[y:y+h, x:x+w]
-        try:
-            emb = get_embedding(face_img)
-            name = recognize(emb, known_faces)
-        except Exception as e:
-            name = "Error"
-            print("[ERROR] Embedding failed:", e)
-
-        cv2.rectangle(frame, (x, y), (x+w, y+h), (0,255,0), 2)
-        cv2.putText(frame, name, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255,255,255), 2)
-
-    cv2.imshow("Face Recognition", frame)
-
-    if flag:
-        GPIO.output(LIGHT1_PIN, GPIO.HIGH)
-        GPIO.output(LIGHT2_PIN, GPIO.HIGH)
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-cap.release()
-cv2.destroyAllWindows()
+    main()
