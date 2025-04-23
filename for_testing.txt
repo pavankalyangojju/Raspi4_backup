@@ -97,6 +97,7 @@ def recognize(embedding, known_embeddings):
     best_match = None
     highest_similarity = -1
 
+
     for name, ref_emb in known_embeddings.items():
         similarity = cosine_similarity(embedding, ref_emb)
         print("similarity: ", similarity)
@@ -153,19 +154,25 @@ for person in os.listdir(DATASET_DIR):
         break  # Use only one image per person
 
 # === Load RFID mapping ===
-try:
-    with open("rfid_map.json", "r") as f:
-        rfid_map = json.load(f)
-except FileNotFoundError:
-    print("[ERROR] rfid_map.json not found!")
-    rfid_map = {}
+rfid_map_file = "rfid_map.json"
+rfid_map = {}
 
-if not known_faces:
-    print("[ERROR] No embeddings found.")
-    exit()
+if os.path.exists(rfid_map_file):
+    try:
+        with open(rfid_map_file, "r") as f:
+            content = f.read().strip()
+            if content:
+                rfid_map = json.loads(content)
+            else:
+                print("[WARNING] rfid_map.json is empty. No RFID mappings loaded.")
+    except json.JSONDecodeError as e:
+        print(f"[ERROR] Failed to decode JSON: {e}")
+else:
+    print("[ERROR] rfid_map.json not found!")
+
 
 # === CSV Setup ===
-attendance_log_file = "/home/pi/Desktop/AIDS/attendance_log.csv"
+attendance_log_file = "/home/pi/Desktop/AI_DS/attendance_log.csv"
 if not os.path.exists(attendance_log_file):
     with open(attendance_log_file, mode='w', newline='') as file:
         writer = csv.writer(file)
@@ -186,12 +193,21 @@ def rotate_servo():
 
     GPIO.output(LIGHT1_PIN, GPIO.HIGH)
     GPIO.output(LIGHT2_PIN, GPIO.HIGH)
+    GPIO.output(FAN1_PIN, GPIO.HIGH)
+    GPIO.output(FAN2_PIN, GPIO.HIGH)
 
-    servo.ChangeDutyCycle(7.5)
+    servo.ChangeDutyCycle(12.0)
     time.sleep(1)
     servo.ChangeDutyCycle(0)
-    time.sleep(2)
-    print("[INFO] Servo returned. Door unlocked.")
+
+    time.sleep(10)
+
+    servo.ChangeDutyCycle(2.5)
+    time.sleep(1)
+    servo.ChangeDutyCycle(0)
+
+    print("[INFO] Servo returned. Door closed.")
+
 
 # === Telegram Bot Setup ===
 BOT_TOKEN = "7646771859:AAF4lyQpDgQ3hepxzFor03hvS5Vm-nzRVgE"
@@ -213,7 +229,7 @@ def telegram_listener():
 
                 reply = "Invalid command."
                 if message == "/door_open":
-                    reply = "Opening door..."
+                    reply = "Door Opened..."
                     threading.Thread(target=rotate_servo).start()
                 elif message == "/light1_on":
                     GPIO.output(LIGHT1_PIN, GPIO.HIGH)
@@ -292,6 +308,7 @@ def main():
                 if len(faces) == 0:
                     print("[WARNING] No face detected")
                     continue
+
 
                 for (x, y, w, h) in faces:
                     face_img = frame[y:y+h, x:x+w]
