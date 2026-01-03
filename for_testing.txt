@@ -2,6 +2,8 @@ import cv2
 import easyocr
 import RPi.GPIO as GPIO
 import time
+import signal
+import sys
 from datetime import datetime
 from mfrc522 import SimpleMFRC522
 
@@ -12,7 +14,7 @@ motor2_in1 = 16
 motor2_in2 = 12
 motor1_en = 5
 motor2_en = 6
-
+GPIO.cleanup()
 GPIO.setmode(GPIO.BCM)
 GPIO.setup([motor1_in1, motor1_in2, motor2_in1, motor2_in2, motor1_en, motor2_en], GPIO.OUT)
 GPIO.output(motor1_en, GPIO.HIGH)
@@ -40,8 +42,8 @@ def stop_motors():
     print("Motors stopped.")
 
 # ---------------- Ultrasonic Setup ----------------
-GPIO_TRIGGER = 23
-GPIO_ECHO = 24
+GPIO_TRIGGER = 17
+GPIO_ECHO = 27
 GPIO.setup(GPIO_TRIGGER, GPIO.OUT)
 GPIO.setup(GPIO_ECHO, GPIO.IN)
 
@@ -72,49 +74,52 @@ def move_until_object(threshold=5.0):
         if d <= threshold:
             stop_motors()
             forward_time = time.time() - start
-            print("Object detected within 5 cm.")
+            print("Object detected within threshold.")
             return forward_time
         time.sleep(0.05)
 
 # ---------------- Servo Setup ----------------
-servo_index_pin = 18
-servo_door_pin = 25
-GPIO.setup(servo_index_pin, GPIO.OUT)
-GPIO.setup(servo_door_pin, GPIO.OUT)
-servo_index = GPIO.PWM(servo_index_pin, 50)
-servo_door = GPIO.PWM(servo_door_pin, 50)
+SERVO_INDEX_PIN = 14
+SERVO_DOOR_PIN = 26
+GPIO.setup(SERVO_INDEX_PIN, GPIO.OUT)
+GPIO.setup(SERVO_DOOR_PIN, GPIO.OUT)
+
+servo_index = GPIO.PWM(SERVO_INDEX_PIN, 50)
+servo_door = GPIO.PWM(SERVO_DOOR_PIN, 50)
 servo_index.start(0)
 servo_door.start(0)
 
-positions = {1: 0, 2: 80, 3: 160}  # index positions
+# Exact angles for 3 parts
+positions = {1: 0, 2: 80, 3: 180}
+DOOR_OPEN = 60   # updated opening angle
+DOOR_CLOSE = 180 # updated closing angle
 
 def angle_to_duty(angle):
-    return angle / 18 + 2.5
+    return 2 + (angle / 18)   # updated formula from second program
 
-def set_servo(servo_pwm, angle, hold=0.5):
+def move_servo_to(part):
+    angle = positions[part]
     duty = angle_to_duty(angle)
-    servo_pwm.ChangeDutyCycle(duty)
+    servo_index.ChangeDutyCycle(duty)
+    time.sleep(1.0)
+    servo_index.ChangeDutyCycle(0)
+
+# Door control using second programâ€™s logic
+def set_angle(angle, hold=0.5):
+    duty = 2 + (angle / 18)
+    GPIO.output(SERVO_DOOR_PIN, True)
+    servo_door.ChangeDutyCycle(duty)
     time.sleep(hold)
-    servo_pwm.ChangeDutyCycle(0)
+    GPIO.output(SERVO_DOOR_PIN, False)
+    servo_door.ChangeDutyCycle(0)
 
-def dispense_tablet(tag):
-    now = datetime.now()
-    hour = now.hour
-    # Example: choose slot based on time
-    if 6 <= hour < 12:
-        part = 1
-    elif 12 <= hour < 18:
-        part = 2
-    else:
-        part = 3
+def door_open():
+    set_angle(DOOR_OPEN, hold=1.0)
+    print("Door opened")
 
-    print(f"Dispensing tablet for tag {tag} at {now.strftime('%H:%M')}")
-    set_servo(servo_index, positions[part])
-    print("Opening door...")
-    set_servo(servo_door, 90)
-    time.sleep(2)
-    print("Closing door...")
-    set_servo(servo_door, 0)
+def door_close():
+    set_angle(DOOR_CLOSE, hold=1.0)
+    print("Door closed")
 
 # ---------------- RFID Setup ----------------
 reader_rfid = SimpleMFRC522()
@@ -125,10 +130,82 @@ def read_rfid():
     print(f"Card ID: {id}, Data: {text}")
     return text.strip()
 
+# ---------------- Dispense Logic ----------------
+def dispense_tablet(tag):
+    now = datetime.now()
+    hour = now.hour
+
+    print(f"Dispensing tablet for tag {tag} at {now.strftime('%H:%M')}")
+
+    tag_to_part = {
+        "Alice": 1,
+        "Bob": 2,
+        "Charlie": 3
+    }
+
+    if tag in tag_to_part:
+        part = tag_to_part[tag]
+        print(f"RFID matched: {tag} â†’ Part {part}")
+        move_servo_to(part)
+        door_open()
+        time.sleep(3)
+        door_close()
+        return
+
+    if hour < 10:
+        print("Morning scenario (<10 AM): Only door operation.")
+        door_open()
+        time.sleep(3)
+        door_close()
+
+    elif 12 <= hour < 14:
+        print("Afternoon scenario (12â€“2 PM): Move part2 to part1.")
+        move_servo_to(2)
+        time.sleep(4)
+        door_open()
+        time.sleep(3)
+        door_close()
+        move_servo_to(1)
+
+    elif 20 <= hour < 22:
+        print("Evening scenario (8â€“10 PM): Move part3 to part1.")
+        move_servo_to(3)
+        time.sleep(1)
+        move_servo_to(1)
+        door_open()
+        time.sleep(3)
+        door_close()
+
+    else:
+        if 6 <= hour < 12:
+            part = 1
+        elif 12 <= hour < 18:
+            part = 2
+        else:
+            part = 3
+        print(f"Default scenario: Moving to part {part}.")
+        move_servo_to(part)
+        time.sleep(3)
+        door_open()
+        time.sleep(1)
+        door_close()
+
 # ---------------- OCR Setup ----------------
 reader = easyocr.Reader(['en'])
 cap = cv2.VideoCapture(0)
 frame_count = 0
+
+# ---------------- Safe Exit Handler ----------------
+def safe_exit(sig, frame):
+    print("Force exit detected, stopping motors...")
+    stop_motors()
+    GPIO.output(motor1_en, GPIO.LOW)
+    GPIO.output(motor2_en, GPIO.LOW)
+    GPIO.cleanup()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, safe_exit)
+signal.signal(signal.SIGTERM, safe_exit)
 
 # ---------------- Main Flow ----------------
 try:
@@ -144,7 +221,7 @@ try:
                 digits = ''.join([c for c in text if c.isdigit()])
                 if digits == "2":
                     print("Digit '2' detected!")
-                    forward_time = move_until_object(threshold=5.0)
+                    forward_time = move_until_object(threshold=13.0)
                     tag = read_rfid()
                     dispense_tablet(tag)
                     print("Returning to original position...")
@@ -152,14 +229,17 @@ try:
                     time.sleep(forward_time)
                     stop_motors()
                     print("Process complete.")
-                    raise KeyboardInterrupt  # exit after one cycle
+                    break
 
-except KeyboardInterrupt:
-    print("Stopped by user")
+except Exception as e:
+    print(f"Error occurred: {e}")
 
 finally:
     cap.release()
     servo_index.stop()
     servo_door.stop()
+    stop_motors()
+    GPIO.output(motor1_en, GPIO.LOW)
+    GPIO.output(motor2_en, GPIO.LOW)
     GPIO.cleanup()
-    print("GPIO cleaned up.")
+    print("Motors stopped and GPIO cleaned up.")
