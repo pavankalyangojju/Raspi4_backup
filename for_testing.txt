@@ -4,6 +4,9 @@ import RPi.GPIO as GPIO
 import time
 import signal
 import sys
+import csv
+import subprocess
+import os
 from datetime import datetime
 from mfrc522 import SimpleMFRC522
 
@@ -55,10 +58,13 @@ def distance():
     start_time = time.time()
     stop_time = time.time()
 
-    while GPIO.input(GPIO_ECHO) == 0:
+    # Add timeouts to avoid hangs if sensor glitches
+    timeout = time.time() + 0.05
+    while GPIO.input(GPIO_ECHO) == 0 and time.time() < timeout:
         start_time = time.time()
 
-    while GPIO.input(GPIO_ECHO) == 1:
+    timeout = time.time() + 0.05
+    while GPIO.input(GPIO_ECHO) == 1 and time.time() < timeout:
         stop_time = time.time()
 
     elapsed = stop_time - start_time
@@ -91,20 +97,22 @@ servo_door.start(0)
 
 # Exact angles for 3 parts
 positions = {1: 0, 2: 80, 3: 180}
-DOOR_OPEN = 60   # updated opening angle
-DOOR_CLOSE = 180 # updated closing angle
+DOOR_OPEN = 60
+DOOR_CLOSE = 180
 
 def angle_to_duty(angle):
-    return 2 + (angle / 18)   # updated formula from second program
+    return 2 + (angle / 18)
 
 def move_servo_to(part):
+    if part not in positions:
+        print(f"Unknown part {part}, defaulting to part 1")
+        part = 1
     angle = positions[part]
     duty = angle_to_duty(angle)
     servo_index.ChangeDutyCycle(duty)
     time.sleep(1.0)
     servo_index.ChangeDutyCycle(0)
 
-# Door control using second programâ€™s logic
 def set_angle(angle, hold=0.5):
     duty = 2 + (angle / 18)
     GPIO.output(SERVO_DOOR_PIN, True)
@@ -121,37 +129,85 @@ def door_close():
     set_angle(DOOR_CLOSE, hold=1.0)
     print("Door closed")
 
+# ---------------- CSV Users Setup ----------------
+# CSV format: name,rfid,part
+# Example:
+# Alice,123456789,1
+# Bob,987654321,2
+# Charlie,555555555,3
+def load_users(csv_file="users.csv"):
+    users = {}
+    if not os.path.exists(csv_file):
+        print(f"CSV file '{csv_file}' not found. Proceeding with empty user database.")
+        return users
+    with open(csv_file, newline='') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            name = row.get('name', '').strip()
+            rfid = row.get('rfid', '').strip()
+            part_str = row.get('part', '').strip()
+            if not name or not rfid:
+                continue
+            try:
+                part = int(part_str) if part_str else 1
+            except ValueError:
+                part = 1
+            users[rfid] = {'name': name, 'part': part}
+    print(f"Loaded {len(users)} users from {csv_file}")
+    return users
+
+users_db = load_users("users.csv")
+
+# ---------------- Bluetooth Speech ----------------
+# Prefer high-quality TTS with pico2wave + paplay; fallback to espeak.
+def speak(message):
+    print(f"TTS: {message}")
+    try:
+        # Generate WAV with pico2wave
+        tmp_wav = "/tmp/tts.wav"
+        subprocess.run(["pico2wave", "-w", tmp_wav, message], check=True)
+        # Play via PipeWire/PulseAudio default sink (your Bluetooth sink)
+        subprocess.run(["paplay", tmp_wav], check=True)
+    except Exception as e:
+        print(f"pico2wave/paplay failed ({e}), trying espeak...")
+        try:
+            subprocess.run(["espeak", message], check=True)
+        except Exception as e2:
+            print(f"espeak failed: {e2}")
+
 # ---------------- RFID Setup ----------------
 reader_rfid = SimpleMFRC522()
 
 def read_rfid():
     print("Place your RFID card near the reader...")
     id, text = reader_rfid.read()
+    # Prefer numeric ID as stable key; fallback to text if present
+    rfid_key = str(id).strip()
     print(f"Card ID: {id}, Data: {text}")
-    return text.strip()
+    return rfid_key
 
-# ---------------- Dispense Logic ----------------
+# ---------------- Dispense Logic (CSV validated) ----------------
 def dispense_tablet(tag):
     now = datetime.now()
     hour = now.hour
-
     print(f"Dispensing tablet for tag {tag} at {now.strftime('%H:%M')}")
 
-    tag_to_part = {
-        "Alice": 1,
-        "Bob": 2,
-        "Charlie": 3
-    }
-
-    if tag in tag_to_part:
-        part = tag_to_part[tag]
-        print(f"RFID matched: {tag} â†’ Part {part}")
+    if tag in users_db:
+        name = users_db[tag]['name']
+        part = users_db[tag]['part']
+        print(f"Valid user: {name} → Part {part}")
+        speak(f"Hello {name}, please take your tablets")
         move_servo_to(part)
         door_open()
         time.sleep(3)
         door_close()
         return
 
+    # Invalid user
+    print("Invalid user")
+    speak("Invalid user")
+
+    # Optional: Keep your time-based fallback logic for non-CSV tags
     if hour < 10:
         print("Morning scenario (<10 AM): Only door operation.")
         door_open()
@@ -159,7 +215,7 @@ def dispense_tablet(tag):
         door_close()
 
     elif 12 <= hour < 14:
-        print("Afternoon scenario (12â€“2 PM): Move part2 to part1.")
+        print("Afternoon scenario (12–2 PM): Move part2 to part1.")
         move_servo_to(2)
         time.sleep(4)
         door_open()
@@ -168,7 +224,7 @@ def dispense_tablet(tag):
         move_servo_to(1)
 
     elif 20 <= hour < 22:
-        print("Evening scenario (8â€“10 PM): Move part3 to part1.")
+        print("Evening scenario (8–10 PM): Move part3 to part1.")
         move_servo_to(3)
         time.sleep(1)
         move_servo_to(1)
@@ -198,10 +254,22 @@ frame_count = 0
 # ---------------- Safe Exit Handler ----------------
 def safe_exit(sig, frame):
     print("Force exit detected, stopping motors...")
-    stop_motors()
+    try:
+        stop_motors()
+    except Exception:
+        pass
     GPIO.output(motor1_en, GPIO.LOW)
     GPIO.output(motor2_en, GPIO.LOW)
     GPIO.cleanup()
+    try:
+        cap.release()
+    except Exception:
+        pass
+    try:
+        servo_index.stop()
+        servo_door.stop()
+    except Exception:
+        pass
     sys.exit(0)
 
 signal.signal(signal.SIGINT, safe_exit)
@@ -212,7 +280,9 @@ try:
     while True:
         ret, frame = cap.read()
         if not ret:
-            break
+            print("Camera frame not available; retrying...")
+            time.sleep(0.2)
+            continue
 
         frame_count += 1
         if frame_count % 10 == 0:
@@ -229,15 +299,22 @@ try:
                     time.sleep(forward_time)
                     stop_motors()
                     print("Process complete.")
+                    # Break out of OCR loop to avoid repeated triggers
                     break
 
 except Exception as e:
     print(f"Error occurred: {e}")
 
 finally:
-    cap.release()
-    servo_index.stop()
-    servo_door.stop()
+    try:
+        cap.release()
+    except Exception:
+        pass
+    try:
+        servo_index.stop()
+        servo_door.stop()
+    except Exception:
+        pass
     stop_motors()
     GPIO.output(motor1_en, GPIO.LOW)
     GPIO.output(motor2_en, GPIO.LOW)
