@@ -9,21 +9,91 @@ import subprocess
 import os
 from datetime import datetime
 from mfrc522 import SimpleMFRC522
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+from RPLCD.i2c import CharLCD   # LCD library
 
-# ---------------- Motor Setup ----------------
+# ---------------- Email config ----------------
+SENDER_EMAIL = "msshyam0007@gmail.com"
+SENDER_PASSWORD = "hmse leij pwzo uoxw"  # Gmail App Password
+RECEIVER_EMAIL = "hemanthkumar04373@gmail.com"
+
+LOG_FILE = "dispense_log.csv"
+
+# ---------------- LCD setup ----------------
+lcd = CharLCD('PCF8574', 0x27)
+
+def lcd_display(message):
+    lcd.clear()
+    lcd.write_string(message)
+    print(f"LCD: {message}")
+
+def lcd_clear():
+    lcd.clear()
+    print("LCD cleared")
+
+# ---------------- Logging ----------------
+def log_dispense_event(rfid_tag, user_name, timestamp):
+    if not os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["RFID", "Name", "Timestamp"])
+    with open(LOG_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([rfid_tag, user_name, timestamp])
+    print(f"Logged dispense event: {rfid_tag}, {user_name}, {timestamp}")
+
+# ---------------- Email ----------------
+def send_email_with_video(video_path, user_name, timestamp):
+    subject = f"Dispense Video - {user_name} - {timestamp}"
+    body = f"Attached is the dispense video recorded on {timestamp} for user {user_name}."
+
+    message = MIMEMultipart()
+    message["From"] = SENDER_EMAIL
+    message["To"] = RECEIVER_EMAIL
+    message["Subject"] = subject
+    message.attach(MIMEText(body, "plain"))
+
+    with open(video_path, "rb") as f:
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(f.read())
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(video_path)}")
+    message.attach(part)
+
+    try:
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, message.as_string())
+        print("Email sent successfully with video attachment!")
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+    finally:
+        server.quit()
+
+# ---------------- Motor setup ----------------
 motor1_in1 = 21
 motor1_in2 = 20
 motor2_in1 = 16
 motor2_in2 = 12
 motor1_en = 5
 motor2_en = 6
+
 GPIO.cleanup()
 GPIO.setmode(GPIO.BCM)
 GPIO.setup([motor1_in1, motor1_in2, motor2_in1, motor2_in2, motor1_en, motor2_en], GPIO.OUT)
-GPIO.output(motor1_en, GPIO.HIGH)
-GPIO.output(motor2_en, GPIO.HIGH)
+
+GPIO.output(motor1_en, GPIO.LOW)
+GPIO.output(motor2_en, GPIO.LOW)
 
 def move_forward():
+    lcd_display("Moving forward...")
+    GPIO.output(motor1_en, GPIO.HIGH)
+    GPIO.output(motor2_en, GPIO.HIGH)
     GPIO.output(motor1_in1, GPIO.HIGH)
     GPIO.output(motor1_in2, GPIO.LOW)
     GPIO.output(motor2_in1, GPIO.HIGH)
@@ -31,6 +101,9 @@ def move_forward():
     print("Moving forward...")
 
 def move_backward():
+    lcd_display("Moving backward...")
+    GPIO.output(motor1_en, GPIO.HIGH)
+    GPIO.output(motor2_en, GPIO.HIGH)
     GPIO.output(motor1_in1, GPIO.LOW)
     GPIO.output(motor1_in2, GPIO.HIGH)
     GPIO.output(motor2_in1, GPIO.LOW)
@@ -38,13 +111,16 @@ def move_backward():
     print("Moving backward...")
 
 def stop_motors():
+    lcd_display("Motors stopped")
     GPIO.output(motor1_in1, GPIO.LOW)
     GPIO.output(motor1_in2, GPIO.LOW)
     GPIO.output(motor2_in1, GPIO.LOW)
     GPIO.output(motor2_in2, GPIO.LOW)
+    GPIO.output(motor1_en, GPIO.LOW)
+    GPIO.output(motor2_en, GPIO.LOW)
     print("Motors stopped.")
 
-# ---------------- Ultrasonic Setup ----------------
+# ---------------- Ultrasonic setup ----------------
 GPIO_TRIGGER = 17
 GPIO_ECHO = 27
 GPIO.setup(GPIO_TRIGGER, GPIO.OUT)
@@ -58,7 +134,6 @@ def distance():
     start_time = time.time()
     stop_time = time.time()
 
-    # Add timeouts to avoid hangs if sensor glitches
     timeout = time.time() + 0.05
     while GPIO.input(GPIO_ECHO) == 0 and time.time() < timeout:
         start_time = time.time()
@@ -84,7 +159,7 @@ def move_until_object(threshold=5.0):
             return forward_time
         time.sleep(0.05)
 
-# ---------------- Servo Setup ----------------
+# ---------------- Servo setup ----------------
 SERVO_INDEX_PIN = 14
 SERVO_DOOR_PIN = 26
 GPIO.setup(SERVO_INDEX_PIN, GPIO.OUT)
@@ -95,23 +170,11 @@ servo_door = GPIO.PWM(SERVO_DOOR_PIN, 50)
 servo_index.start(0)
 servo_door.start(0)
 
-# Exact angles for 3 parts
-positions = {1: 0, 2: 80, 3: 180}
 DOOR_OPEN = 60
 DOOR_CLOSE = 180
 
 def angle_to_duty(angle):
     return 2 + (angle / 18)
-
-def move_servo_to(part):
-    if part not in positions:
-        print(f"Unknown part {part}, defaulting to part 1")
-        part = 1
-    angle = positions[part]
-    duty = angle_to_duty(angle)
-    servo_index.ChangeDutyCycle(duty)
-    time.sleep(1.0)
-    servo_index.ChangeDutyCycle(0)
 
 def set_angle(angle, hold=0.5):
     duty = 2 + (angle / 18)
@@ -122,51 +185,27 @@ def set_angle(angle, hold=0.5):
     servo_door.ChangeDutyCycle(0)
 
 def door_open():
+    lcd_display("Door opened")
     set_angle(DOOR_OPEN, hold=1.0)
     print("Door opened")
 
 def door_close():
+    lcd_display("Door closed")
     set_angle(DOOR_CLOSE, hold=1.0)
     print("Door closed")
 
-# ---------------- CSV Users Setup ----------------
-# CSV format: name,rfid,part
-# Example:
-# Alice,123456789,1
-# Bob,987654321,2
-# Charlie,555555555,3
-def load_users(csv_file="users.csv"):
-    users = {}
-    if not os.path.exists(csv_file):
-        print(f"CSV file '{csv_file}' not found. Proceeding with empty user database.")
-        return users
-    with open(csv_file, newline='') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            name = row.get('name', '').strip()
-            rfid = row.get('rfid', '').strip()
-            part_str = row.get('part', '').strip()
-            if not name or not rfid:
-                continue
-            try:
-                part = int(part_str) if part_str else 1
-            except ValueError:
-                part = 1
-            users[rfid] = {'name': name, 'part': part}
-    print(f"Loaded {len(users)} users from {csv_file}")
-    return users
+# ---------------- RFID dictionary ----------------
+rfid = {
+    "353610563795": {"name": "Hemanth", "part": 2}
+}
 
-users_db = load_users("users.csv")
-
-# ---------------- Bluetooth Speech ----------------
-# Prefer high-quality TTS with pico2wave + paplay; fallback to espeak.
+# ---------------- Bluetooth speech ----------------
 def speak(message):
     print(f"TTS: {message}")
+    lcd_display(message)   # Show on LCD
     try:
-        # Generate WAV with pico2wave
         tmp_wav = "/tmp/tts.wav"
         subprocess.run(["pico2wave", "-w", tmp_wav, message], check=True)
-        # Play via PipeWire/PulseAudio default sink (your Bluetooth sink)
         subprocess.run(["paplay", tmp_wav], check=True)
     except Exception as e:
         print(f"pico2wave/paplay failed ({e}), trying espeak...")
@@ -175,83 +214,83 @@ def speak(message):
         except Exception as e2:
             print(f"espeak failed: {e2}")
 
-# ---------------- RFID Setup ----------------
+# ---------------- RFID setup ----------------
 reader_rfid = SimpleMFRC522()
 
 def read_rfid():
+    lcd_display("Scan RFID card...")
     print("Place your RFID card near the reader...")
     id, text = reader_rfid.read()
-    # Prefer numeric ID as stable key; fallback to text if present
-    rfid_key = str(id).strip()
-    print(f"Card ID: {id}, Data: {text}")
+    rfid_key = str(id).strip().replace(" ", "")
+    print(f"Card ID: {id}, Data: {text}, Normalized key: '{rfid_key}'")
     return rfid_key
 
-# ---------------- Dispense Logic (CSV validated) ----------------
-def dispense_tablet(tag):
-    now = datetime.now()
-    hour = now.hour
-    print(f"Dispensing tablet for tag {tag} at {now.strftime('%H:%M')}")
-
-    if tag in users_db:
-        name = users_db[tag]['name']
-        part = users_db[tag]['part']
-        print(f"Valid user: {name} → Part {part}")
-        speak(f"Hello {name}, please take your tablets")
-        move_servo_to(part)
-        door_open()
-        time.sleep(3)
-        door_close()
-        return
-
-    # Invalid user
-    print("Invalid user")
-    speak("Invalid user")
-
-    # Optional: Keep your time-based fallback logic for non-CSV tags
-    if hour < 10:
-        print("Morning scenario (<10 AM): Only door operation.")
-        door_open()
-        time.sleep(3)
-        door_close()
-
-    elif 12 <= hour < 14:
-        print("Afternoon scenario (12–2 PM): Move part2 to part1.")
-        move_servo_to(2)
-        time.sleep(4)
-        door_open()
-        time.sleep(3)
-        door_close()
-        move_servo_to(1)
-
-    elif 20 <= hour < 22:
-        print("Evening scenario (8–10 PM): Move part3 to part1.")
-        move_servo_to(3)
-        time.sleep(1)
-        move_servo_to(1)
-        door_open()
-        time.sleep(3)
-        door_close()
-
-    else:
-        if 6 <= hour < 12:
-            part = 1
-        elif 12 <= hour < 18:
-            part = 2
-        else:
-            part = 3
-        print(f"Default scenario: Moving to part {part}.")
-        move_servo_to(part)
-        time.sleep(3)
-        door_open()
-        time.sleep(1)
-        door_close()
-
-# ---------------- OCR Setup ----------------
+# ---------------- OCR setup ----------------
 reader = easyocr.Reader(['en'])
 cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 frame_count = 0
 
-# ---------------- Safe Exit Handler ----------------
+# ---------------- Dispense logic ----------------
+def dispense_tablet(tag, forward_time):
+    now = datetime.now()
+    if tag in rfid:
+        name = rfid[tag]['name']
+        speak(f"Hello {name}, please take your tablets")
+
+        # Servo movement
+        door_open()
+
+        # Record video
+        video_filename = f"dispense_{now.strftime('%Y%m%d_%H%M%S')}.avi"
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        out = cv2.VideoWriter(video_filename, fourcc, 20.0, (640, 480))
+        # Record 10 seconds of video
+        start_time = time.time()
+        while time.time() - start_time < 10:
+            ret, frame = cap.read()
+            if ret:
+                out.write(frame)
+            else:
+                time.sleep(0.05)
+        out.release()
+        print(f"Video saved as {video_filename}")
+
+        timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+        send_email_with_video(video_filename, name, timestamp)
+        log_dispense_event(tag, name, timestamp)
+
+        time.sleep(3)
+        door_close()
+
+        # Reset index servo
+        duty = angle_to_duty(0)
+        servo_index.ChangeDutyCycle(duty)
+        time.sleep(1.0)
+        servo_index.ChangeDutyCycle(0)
+
+        print("Dispense complete.")
+
+        # Return to original position
+        move_backward()
+        time.sleep(forward_time)
+        stop_motors()
+        lcd_clear()   # <-- Clear LCD after backward movement
+        print("Process complete.")
+
+    else:
+        available = ", ".join(rfid.keys())
+        speak("Invalid user")
+        print(f"Invalid user. Read tag='{tag}'. Known keys=[{available}]")
+
+        move_backward()
+        time.sleep(forward_time)
+        stop_motors()
+        lcd_clear()   # <-- Clear LCD after backward movement
+        print("Returned due to invalid user.")
+
+# ---------------- Safe exit handler ----------------
 def safe_exit(sig, frame):
     print("Force exit detected, stopping motors...")
     try:
@@ -260,7 +299,6 @@ def safe_exit(sig, frame):
         pass
     GPIO.output(motor1_en, GPIO.LOW)
     GPIO.output(motor2_en, GPIO.LOW)
-    GPIO.cleanup()
     try:
         cap.release()
     except Exception:
@@ -270,37 +308,38 @@ def safe_exit(sig, frame):
         servo_door.stop()
     except Exception:
         pass
+    lcd_clear()
+    GPIO.cleanup()
     sys.exit(0)
 
 signal.signal(signal.SIGINT, safe_exit)
 signal.signal(signal.SIGTERM, safe_exit)
 
-# ---------------- Main Flow ----------------
+# ---------------- Main flow ----------------
 try:
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("Camera frame not available; retrying...")
-            time.sleep(0.2)
-            continue
+        d = distance()
+        if d > 10:  # Only proceed if no object within 10 cm
+            ret, frame = cap.read()
+            if not ret:
+                print("Camera frame not available; retrying...")
+                time.sleep(0.2)
+                continue
 
-        frame_count += 1
-        if frame_count % 10 == 0:
-            results = reader.readtext(frame)
-            for (_, text, prob) in results:
-                digits = ''.join([c for c in text if c.isdigit()])
-                if digits == "2":
-                    print("Digit '2' detected!")
-                    forward_time = move_until_object(threshold=13.0)
-                    tag = read_rfid()
-                    dispense_tablet(tag)
-                    print("Returning to original position...")
-                    move_backward()
-                    time.sleep(forward_time)
-                    stop_motors()
-                    print("Process complete.")
-                    # Break out of OCR loop to avoid repeated triggers
-                    break
+            frame_count += 1
+            if frame_count % 10 == 0:
+                results = reader.readtext(frame)
+                for (_, text, prob) in results:
+                    digits = ''.join([c for c in text if c.isdigit()])
+                    if digits == "2":
+                        print("Digit '2' detected and no object within 10cm!")
+                        forward_time = move_until_object(threshold=13.0)
+                        tag = read_rfid()
+                        dispense_tablet(tag, forward_time)
+                        break
+        else:
+            print(f"Object detected at {d:.2f} cm — waiting...")
+            time.sleep(0.2)
 
 except Exception as e:
     print(f"Error occurred: {e}")
@@ -318,5 +357,5 @@ finally:
     stop_motors()
     GPIO.output(motor1_en, GPIO.LOW)
     GPIO.output(motor2_en, GPIO.LOW)
+    lcd_clear()
     GPIO.cleanup()
-    print("Motors stopped and GPIO cleaned up.")
