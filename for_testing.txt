@@ -28,7 +28,7 @@ lcd = CharLCD('PCF8574', 0x27)
 
 def lcd_display(message):
     lcd.clear()
-    lcd.write_string(message)
+    lcd.write_string(message[:32])  # truncate to avoid overflow
     print(f"LCD: {message}")
 
 def lcd_clear():
@@ -184,6 +184,14 @@ def set_angle(angle, hold=0.5):
     GPIO.output(SERVO_DOOR_PIN, False)
     servo_door.ChangeDutyCycle(0)
 
+def index_servo_to_angle(angle, hold=1.0):
+    # Move index servo to a specific angle
+    lcd_display(f"Index servo {angle} deg")
+    duty = angle_to_duty(angle)
+    servo_index.ChangeDutyCycle(duty)
+    time.sleep(hold)
+    servo_index.ChangeDutyCycle(0)
+
 def door_open():
     lcd_display("Door opened")
     set_angle(DOOR_OPEN, hold=1.0)
@@ -195,6 +203,7 @@ def door_close():
     print("Door closed")
 
 # ---------------- RFID dictionary ----------------
+# 'part' can be used for user-specific default slot if needed.
 rfid = {
     "353610563795": {"name": "Hemanth", "part": 2}
 }
@@ -232,6 +241,32 @@ cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 frame_count = 0
 
+# ---------------- Time-based Index Servo ----------------
+# Map parts to angles: 1->0°, 2->90°, 3->180°
+PART_ANGLE = {1: 0, 2: 90, 3: 180}
+
+def move_servo_by_time():
+    now = datetime.now()
+    hour = now.hour
+
+    if 6 <= hour < 12:
+        part = 1   # Morning
+        lcd_display("Morning: Part 1")
+        angle = PART_ANGLE[part]
+        index_servo_to_angle(angle)
+
+    elif 12 <= hour < 18:
+        part = 2   # Afternoon
+        lcd_display("Afternoon: Part 2")
+        angle = PART_ANGLE[part]
+        index_servo_to_angle(angle)
+
+    else:
+        part = 3   # Night
+        lcd_display("Night: Part 3")
+        angle = PART_ANGLE[part]
+        index_servo_to_angle(angle)
+
 # ---------------- Dispense logic ----------------
 def dispense_tablet(tag, forward_time):
     now = datetime.now()
@@ -239,14 +274,17 @@ def dispense_tablet(tag, forward_time):
         name = rfid[tag]['name']
         speak(f"Hello {name}, please take your tablets")
 
-        # Servo movement
+        # Time-based index selection (morning/afternoon/night)
+        move_servo_by_time()
+
+        # Open door to dispense
         door_open()
 
         # Record video
         video_filename = f"dispense_{now.strftime('%Y%m%d_%H%M%S')}.avi"
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
         out = cv2.VideoWriter(video_filename, fourcc, 20.0, (640, 480))
-        # Record 10 seconds of video
+
         start_time = time.time()
         while time.time() - start_time < 10:
             ret, frame = cap.read()
@@ -264,11 +302,9 @@ def dispense_tablet(tag, forward_time):
         time.sleep(3)
         door_close()
 
-        # Reset index servo
-        duty = angle_to_duty(0)
-        servo_index.ChangeDutyCycle(duty)
-        time.sleep(1.0)
-        servo_index.ChangeDutyCycle(0)
+        # Reset index servo to 0° after door closes
+        lcd_display("Reset index to 0°")
+        index_servo_to_angle(0)
 
         print("Dispense complete.")
 
@@ -276,7 +312,7 @@ def dispense_tablet(tag, forward_time):
         move_backward()
         time.sleep(forward_time)
         stop_motors()
-        lcd_clear()   # <-- Clear LCD after backward movement
+        lcd_clear()   # Clear LCD after backward movement
         print("Process complete.")
 
     else:
@@ -287,7 +323,7 @@ def dispense_tablet(tag, forward_time):
         move_backward()
         time.sleep(forward_time)
         stop_motors()
-        lcd_clear()   # <-- Clear LCD after backward movement
+        lcd_clear()   # Clear LCD after backward movement
         print("Returned due to invalid user.")
 
 # ---------------- Safe exit handler ----------------
