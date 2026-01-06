@@ -351,6 +351,31 @@ def safe_exit(sig, frame):
 signal.signal(signal.SIGINT, safe_exit)
 signal.signal(signal.SIGTERM, safe_exit)
 
+# ---------------- Object handling logic ----------------
+def handle_object_detection():
+    d = distance()
+    print(f"Distance: {d:.2f} cm")
+
+    if d < 10:
+        # Stop immediately if object too close
+        stop_motors()
+        lcd_display("Object <10cm: Stopped")
+        print("Stopped due to object <10cm")
+        return None   # No RFID check
+
+    elif 10 <= d <= 20:
+        # Pause and check RFID
+        stop_motors()
+        lcd_display("Object 10-20cm: Checking RFID")
+        print("Object between 10-20cm, checking RFID...")
+        tag = read_rfid()
+        return tag    # Return RFID tag for further processing
+
+    else:
+        # Keep moving forward
+        move_forward()
+        return None
+
 # ---------------- Main flow ----------------
 try:
     while True:
@@ -369,9 +394,15 @@ try:
                     digits = ''.join([c for c in text if c.isdigit()])
                     if digits == "2":
                         print("Digit '2' detected and no object within 10cm!")
-                        forward_time = move_until_object(threshold=13.0)
-                        tag = read_rfid()
-                        dispense_tablet(tag, forward_time)
+                        move_forward()
+
+                        while True:
+                            tag = handle_object_detection()
+                            if tag:   # RFID was checked
+                                forward_time = move_until_object(threshold=13.0)
+                                dispense_tablet(tag, forward_time)
+                                break
+                            time.sleep(0.1)
                         break
         else:
             print(f"Object detected at {d:.2f} cm — waiting...")
@@ -395,3 +426,4 @@ finally:
     GPIO.output(motor2_en, GPIO.LOW)
     lcd_clear()
     GPIO.cleanup()
+
