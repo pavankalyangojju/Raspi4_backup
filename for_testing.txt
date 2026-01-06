@@ -198,7 +198,7 @@ def door_open():
     print("Door opened")
 
 def door_close():
-    lcd_display("Door closed")
+    lcd_display("Thank You")
     set_angle(DOOR_CLOSE, hold=1.0)
     print("Door closed")
 
