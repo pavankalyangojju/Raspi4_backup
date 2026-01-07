@@ -10,16 +10,16 @@ import os
 from datetime import datetime
 from mfrc522 import SimpleMFRC522
 import smtplib
-from email.mime.text import MIMEText
+from email.mime_text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 from RPLCD.i2c import CharLCD   # LCD library
 
 # ---------------- Email config ----------------
-SENDER_EMAIL = "msshyam0007@gmail.com"
-SENDER_PASSWORD = "hmse leij pwzo uoxw"  # Gmail App Password
-RECEIVER_EMAIL = "hemanthkumar04373@gmail.com"
+SENDER_EMAIL = "hemanthkumar04373@gmail.com"
+SENDER_PASSWORD = "siby augg idpu rojr"  # Gmail App Password
+RECEIVER_EMAIL = "modemsambasiva@gmail.com"
 
 LOG_FILE = "dispense_log.csv"
 
@@ -185,7 +185,6 @@ def set_angle(angle, hold=0.5):
     servo_door.ChangeDutyCycle(0)
 
 def index_servo_to_angle(angle, hold=1.0):
-    # Move index servo to a specific angle
     lcd_display(f"Index servo {angle} deg")
     duty = angle_to_duty(angle)
     servo_index.ChangeDutyCycle(duty)
@@ -351,62 +350,54 @@ def safe_exit(sig, frame):
 signal.signal(signal.SIGINT, safe_exit)
 signal.signal(signal.SIGTERM, safe_exit)
 
-# ---------------- Object handling logic ----------------
-def handle_object_detection():
-    d = distance()
-    print(f"Distance: {d:.2f} cm")
-
-    if d < 10:
-        # Stop immediately if object too close
-        stop_motors()
-        lcd_display("Object <10cm: Stopped")
-        print("Stopped due to object <10cm")
-        return None   # No RFID check
-
-    elif 10 <= d <= 20:
-        # Pause and check RFID
-        stop_motors()
-        lcd_display("Object 10-20cm: Checking RFID")
-        print("Object between 10-20cm, checking RFID...")
-        tag = read_rfid()
-        return tag    # Return RFID tag for further processing
-
-    else:
-        # Keep moving forward
-        move_forward()
-        return None
-
 # ---------------- Main flow ----------------
 try:
     while True:
-        d = distance()
-        if d > 10:  # Only proceed if no object within 10 cm
-            ret, frame = cap.read()
-            if not ret:
-                print("Camera frame not available; retrying...")
-                time.sleep(0.2)
-                continue
-
-            frame_count += 1
-            if frame_count % 10 == 0:
-                results = reader.readtext(frame)
-                for (_, text, prob) in results:
-                    digits = ''.join([c for c in text if c.isdigit()])
-                    if digits == "2":
-                        print("Digit '2' detected and no object within 10cm!")
-                        move_forward()
-
-                        while True:
-                            tag = handle_object_detection()
-                            if tag:   # RFID was checked
-                                forward_time = move_until_object(threshold=13.0)
-                                dispense_tablet(tag, forward_time)
-                                break
-                            time.sleep(0.1)
-                        break
-        else:
-            print(f"Object detected at {d:.2f} cm — waiting...")
+        # Read camera for OCR
+        ret, frame = cap.read()
+        if not ret:
+            print("Camera frame not available; retrying...")
             time.sleep(0.2)
+            continue
+
+        frame_count += 1
+
+        # Only run OCR periodically to reduce load
+        if frame_count % 10 == 0:
+            results = reader.readtext(frame)
+            for (_, text, prob) in results:
+                digits = ''.join([c for c in text if c.isdigit()])
+
+                # Move only when target digit is found
+                if digits == "1":
+                    print("Digit '1' detected!")
+                    move_forward()
+
+                    # Keep moving until object is within 10 cm, then stop and trigger RFID
+                    while True:
+                        d = distance()
+                        print(f"Distance: {d:.2f} cm")
+
+                        if d < 10:
+                            stop_motors()
+                            lcd_display("Object <10cm: Stopped")
+                            print("Stopped due to object <10cm. Triggering RFID...")
+
+                            # Read RFID at 10 cm stop
+                            tag = read_rfid()
+
+                            # Proceed forward until the final threshold (e.g., 13 cm) for dispensing
+                            forward_time = move_until_object(threshold=13.0)
+
+                            # Run full dispense logic
+                            dispense_tablet(tag, forward_time)
+                            break
+
+                        time.sleep(0.05)
+                    break  # Exit outer results loop to restart OCR after dispense
+
+        # If no digit found, optionally idle or minor forward checks can be added
+        time.sleep(0.05)
 
 except Exception as e:
     print(f"Error occurred: {e}")
@@ -426,4 +417,3 @@ finally:
     GPIO.output(motor2_en, GPIO.LOW)
     lcd_clear()
     GPIO.cleanup()
-
